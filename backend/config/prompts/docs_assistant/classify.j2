@@ -1,0 +1,12 @@
+Classify the user's message below into exactly one of these intents:
+
+{% for intent in intents %}
+- {{ intent.name }}: {{ intent.description }}
+{% endfor %}
+
+Pick the single best-matching intent name and rate your confidence from 0.0
+(guessing) to 1.0 (certain). If nothing fits well, or the message is
+ambiguous, use "unclear" with a low confidence score rather than forcing a
+weak match.
+
+Message: {{ question }}

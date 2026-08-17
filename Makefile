@@ -39,7 +39,7 @@ seed: ## Seed the database with sample conversations/users
 	cd backend && uv run python -m src.scripts.seed
 
 ingest: ## Ingest backend/data/sample_corpus into pgvector (chunks + embeddings)
-	cd backend && uv run python -m src.modules.ingestion.cli
+	cd backend && PYTHONPATH=src uv run python -m modules.ingestion.cli
 
 contract: ## Regenerate the frontend TS contract from the backend's OpenAPI schema
 	cd frontend && pnpm run contract

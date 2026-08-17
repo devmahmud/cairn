@@ -8,17 +8,21 @@ FastAPI (the CLI eval harness, §3.11). Everything else -- including the
 concern and don't mix `Provide` and `Depends` for the same kind of
 dependency."
 
-What's real today (§8 step 4): `config`, `sessionmaker`, `loader`,
+What's real today (§8 steps 4-5): `config`, `sessionmaker`, `loader`,
 `prompt_engine` (both tiers -- bundled `.j2` files, and the Langfuse-by-
 label overlay when `LANGFUSE_PROMPTS=true`), `db_engine`, `runtime_config`,
-`behavior_config`. `embedding_service` / `retrieval_service` /
-`checkpointer` / `chat_agent` / `chat_streamer` are wired with the right
-*shape* -- provider type, name, dependency edges -- exactly as later steps
-(§8 steps 5-6) need it, but resolving one of them before its step lands
-raises `NotImplementedError` immediately (see `_not_yet_implemented`
-below) rather than silently importing a class that doesn't exist yet
-(which would break importing this module at all) or returning a
-half-working object.
+`behavior_config`, `embedding_service`, `retrieval_service`,
+`checkpointer_pool`/`checkpointer`, and `chat_agent`. As the composition
+root, this module is the one sanctioned place that imports "up" from
+`agents/`/`modules/` into what's otherwise `core/`'s own layer (§3.1) --
+wiring the object graph together is the whole point of a composition root.
+
+`chat_streamer` is still wired with the right *shape* -- provider type,
+name, dependency edges -- exactly as §8 step 6 needs it, but resolving it
+before that step lands raises `NotImplementedError` immediately (see
+`_not_yet_implemented` below) rather than silently importing a class that
+doesn't exist yet (which would break importing this module at all) or
+returning a half-working object.
 """
 
 from __future__ import annotations
@@ -27,13 +31,17 @@ from typing import Any, NoReturn
 
 from dependency_injector import containers, providers
 
+from agents.chat.agent import ChatAgent
 from core.behavior.loader import BehaviorConfig
 from core.config import settings
+from core.db.checkpointer import build_checkpointer, build_checkpointer_pool
 from core.db.engine import SessionLocal, engine
 from core.prompts.engine import PromptEngine
 from core.prompts.langfuse_client import build_langfuse_prompt_client
 from core.prompts.loader import FileSystemJ2Loader
 from core.runtime_config import RuntimeConfig
+from modules.embedding.service import OpenAIEmbeddingService
+from modules.retrieval.factory import build_retrieval_service
 
 
 def _not_yet_implemented(component: str, blueprint_section: str) -> Any:
@@ -99,22 +107,42 @@ class Container(containers.DeclarativeContainer):
         overrides=runtime_config,
     )
 
-    # --- Not yet implemented -- §8 steps 5-6 build these -------------------
-    embedding_service = providers.Singleton(
-        _not_yet_implemented("embedding_service (OpenAIEmbeddingService)", "§3.8, §8 step 5"),
-    )
+    # Self-hosted-by-default, OpenAI-compatible embeddings client (§3.8) --
+    # `OpenAIEmbeddingService`'s own constructor defaults already read
+    # `settings.EMBEDDING_MODEL`/`OPENAI_BASE_URL`/etc., so no kwargs are
+    # threaded through here; touches no network until a query actually
+    # calls it (offline-first, design principle #4).
+    embedding_service = providers.Singleton(OpenAIEmbeddingService)
+
+    # `build_retrieval_service` (§3.8's factory): `USE_LOCAL_RETRIEVAL=true`
+    # (the offline-first default) returns the zero-dep fixture service and
+    # never touches `sessionmaker`/`embedding_service`'s network path at
+    # all; `false` builds the real pgvector-hybrid(+rerank) service.
     retrieval_service = providers.Singleton(
-        _not_yet_implemented("retrieval_service (build_retrieval_service)", "§3.8, §8 step 5"),
+        build_retrieval_service,
+        use_local=settings.USE_LOCAL_RETRIEVAL,
+        rerank=settings.RERANK_ENABLED,
+        sessionmaker=sessionmaker,
+        embedding_service=embedding_service,
     )
-    checkpointer = providers.Singleton(
-        _not_yet_implemented("checkpointer (AsyncPostgresSaver)", "§3.3, §3.6, §8 step 5"),
-    )
+
+    # LangGraph's checkpointer (§3.3, §3.6) -- `checkpointer_pool` is built
+    # `open=False` (no network at construction, same offline-first stance as
+    # every other provider here); `main.py`'s lifespan is the one place that
+    # `await`s `.open()` and `AsyncPostgresSaver.setup()` once at startup
+    # (see its docstring for exactly why there, not here).
+    checkpointer_pool = providers.Singleton(build_checkpointer_pool, settings=config)
+    checkpointer = providers.Singleton(build_checkpointer, pool=checkpointer_pool)
+
     chat_agent = providers.Singleton(
-        _not_yet_implemented("chat_agent (ChatAgent)", "§3.6, §8 step 5"),
+        ChatAgent,
         prompt_engine=prompt_engine,
         retrieval_service=retrieval_service,
         checkpointer=checkpointer,
+        behavior_config=behavior_config,
     )
+
+    # --- Not yet implemented -- §8 step 6 builds this -----------------------
     chat_streamer = providers.Factory(
         _not_yet_implemented("chat_streamer (ChatStreamer)", "§3.7, §8 step 6"),
         chat_agent=chat_agent,

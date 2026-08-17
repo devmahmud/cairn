@@ -37,6 +37,20 @@ engine: AsyncEngine = create_async_engine(
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
+def to_psycopg_dsn(database_url: str) -> str:
+    """Strip SQLAlchemy's `+asyncpg` driver qualifier for `psycopg` consumers.
+
+    `Settings.DATABASE_URL` is a SQLAlchemy URL (`postgresql+asyncpg://...`)
+    -- correct for this module's own `asyncpg`-backed engine, but LangGraph's
+    `AsyncPostgresSaver` (`langgraph-checkpoint-postgres`) is built on
+    `psycopg` (v3), a different driver with its own plain
+    `postgresql://...` DSN format (§3.3, §8 step 5's checkpointer provider,
+    `core/di/container.py`). Both drivers point at the same database; only
+    the connection-string dialect differs.
+    """
+    return database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+
+
 async def get_session() -> AsyncGenerator[AsyncSession]:
     """FastAPI dependency: commit-per-request unit of work for REST routes.
 

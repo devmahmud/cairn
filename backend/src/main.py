@@ -57,11 +57,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # LangGraph's `AsyncPostgresSaver` owns and migrates its own checkpoint
     # tables at startup (BLUEPRINT.md §3.3) -- deliberately NOT via Alembic,
-    # so it can never race or duplicate the app's own migrations. The
-    # checkpointer instance itself is wired through the DI container in a
-    # later scaffold step (agents, §8 step 5); this is the exact call-site
-    # it belongs at once it exists:
-    # await container.checkpointer().setup()
+    # so it can never race or duplicate the app's own migrations. The pool
+    # is built `open=False` (§8 step 5, `core/db/checkpointer.py`) so
+    # resolving the DI container's providers never touches the network by
+    # itself; opening it and running `.setup()` (idempotent -- creates the
+    # checkpoint tables on first run, no-ops after) belongs here, the one
+    # place that represents "the app is actually starting up".
+    checkpointer_pool = container.checkpointer_pool()
+    await checkpointer_pool.open()
+    await container.checkpointer().setup()
 
     yield
 
@@ -69,6 +73,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         task.cancel()
     await asyncio.gather(*hot_reload_tasks, return_exceptions=True)
 
+    await checkpointer_pool.close()
     await engine.dispose()
     logger.info("app.shutdown")
 

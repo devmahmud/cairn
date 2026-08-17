@@ -32,7 +32,7 @@ ignore = [
 "alembic/env.py" = ["T20"]
 
 [lint.isort]
-known-first-party = ["core", "modules", "agents", "examples"]
+known-first-party = ["core", "modules", "agents", "examples", "tests"]
 
 [format]
 quote-style = "double"

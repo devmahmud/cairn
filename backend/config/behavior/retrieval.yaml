@@ -1,0 +1,25 @@
+# RAG tuning for the `rag` graph node (BLUEPRINT.md §3.6, §3.8:
+# "abstain on low *reranker* score, calibrated, not `0.0`"). Loaded through
+# `core/behavior/loader.py` -- hot-reloaded (§3.2 tier 3) and overridable
+# cluster-wide via the `config_overrides` table (§3.2 tier 2) with keys of
+# the form `behavior.retrieval.<dotted.path>`, e.g. an `UPDATE` setting
+# `behavior.retrieval.abstain_score_threshold` to `0.3` raises the
+# grounding bar without editing this file or redeploying.
+
+version: 1
+
+# How many passages `agents/chat/nodes/rag.py` asks `RetrievalService.query()`
+# for. Overfetch/RRF/rerank tuning that happens *inside* the retrieval
+# pipeline (before it ever returns `top_k` docs) lives with those services
+# instead (`modules/retrieval/pgvector.py`, `modules/retrieval/reranker.py`)
+# -- this is only the node's own request size.
+top_k: 5
+
+# Below this score, the top retrieved passage isn't a strong enough match to
+# ground an answer on -- the `rag` node abstains (returns a "not covered"
+# response) instead of answering from a weak or irrelevant retrieval.
+# Calibrated against `bge-reranker-v2-m3`'s roughly-`[0, 1]` relevance
+# score, not `0.0` (§3.8: "RAG abstains on low *reranker* score, calibrated,
+# not `0.0`") -- `0.0` would only catch a completely empty result set, not a
+# retrieval that returned *something* but nothing actually relevant.
+abstain_score_threshold: 0.15

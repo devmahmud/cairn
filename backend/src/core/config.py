@@ -20,11 +20,24 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+    # Forced/structured output isn't uniform across providers (`tool_choice`
+    # behaves differently on e.g. Ollama, §3.6). `agents/chat/nodes/classify.py`
+    # reads this to pick the `with_structured_output(method=...)` strategy;
+    # "json_mode"/"guided_json" are the documented fallbacks for providers
+    # that don't support `"json_schema"`.
+    STRUCTURED_OUTPUT_MODE: str = "json_schema"
     EMBEDDING_MODEL: str = "Qwen3-Embedding-0.6B"
     EMBEDDING_DIMENSION: int = 1024
     CONFIG_DIR: str = "config"
     USE_LOCAL_RETRIEVAL: bool = False
     RERANK_ENABLED: bool = True
+    # Self-hosted `bge-reranker-v2-m3` (or `Qwen3-Reranker`) endpoint (§3.8).
+    # Blank -- even with `RERANK_ENABLED=true` -- degrades `RerankedRetrieval`
+    # to a warn-once no-op passthrough rather than failing retrieval outright
+    # (design principle #4, offline-first): a client that hasn't stood up a
+    # reranker yet still gets hybrid RRF results, just unreranked.
+    RERANKER_BASE_URL: str = ""
+    RERANKER_MODEL: str = "bge-reranker-v2-m3"
     REDIS_URL: str = ""
     STREAM_DURABLE: bool = False
     GUARDRAILS_ENABLED: bool = False
