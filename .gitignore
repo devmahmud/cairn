@@ -1,0 +1,33 @@
+# --- Python (backend/) ---
+__pycache__/
+*.py[cod]
+.venv/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# --- Node (frontend/) ---
+node_modules/
+.pnpm-store/
+frontend/dist/
+frontend/build/
+*.tsbuildinfo
+
+# --- Env / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Editors / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- Docker / data ---
+*.log
+.docker-data/
