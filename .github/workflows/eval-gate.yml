@@ -1,0 +1,58 @@
+# Cairn — prompt/behavior regression gate (BLUEPRINT.md §3.11, §6, §8 step 9).
+#
+# Path-filtered: only runs when a prompt or behavior config file changes,
+# and gates the merge on the deterministic + injection eval subset (cheap,
+# local-model-only -- no LLM-judge, no cost-incurring calls, §3.11's "CI
+# gate" bullet). Cost-incurring LLM-judged eval scenarios stay a manual,
+# non-gating run.
+#
+# `backend/tests/eval/` currently has no collected tests yet -- the actual
+# deterministic + injection packs land in BLUEPRINT.md §8 step 10. This
+# workflow is wired against the real future command (`pytest tests/eval`)
+# rather than a placeholder, and treats pytest's "no tests collected" exit
+# code (5) as a pass rather than blocking every prompt/behavior PR on a
+# step that hasn't landed yet -- once step 10 adds real eval cases, this
+# starts gating for real with no workflow change needed.
+
+name: Eval gate
+
+on:
+  pull_request:
+    paths:
+      - "backend/config/prompts/**"
+      - "backend/config/behavior/**"
+
+concurrency:
+  group: eval-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    name: Deterministic + injection eval subset
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies (locked)
+        run: uv sync --locked
+
+      - name: Run deterministic + injection eval subset
+        run: |
+          set +e
+          uv run pytest tests/eval -m "not eval" -q
+          code=$?
+          set -e
+          if [ "$code" -eq 5 ]; then
+            echo "::notice::No eval tests collected yet under backend/tests/eval/ (BLUEPRINT.md §8 step 10 adds the deterministic + injection packs) -- treating as a pass, not a gate failure."
+            exit 0
+          fi
+          exit "$code"

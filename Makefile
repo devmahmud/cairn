@@ -9,7 +9,7 @@
 
 COMPOSE ?= docker compose
 
-.PHONY: help setup run test up down migrate seed ingest contract up-langfuse up-litellm
+.PHONY: help setup run test up down migrate seed ingest contract contract-check up-langfuse up-litellm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -35,14 +35,17 @@ down: ## Stop the local stack
 migrate: ## Apply backend Alembic migrations
 	cd backend && uv run alembic upgrade head
 
-seed: ## Seed the database with sample conversations/users
-	cd backend && uv run python -m src.scripts.seed
+seed: ## Seed the database with a sample user + conversation
+	cd backend && PYTHONPATH=src uv run python -m scripts.seed
 
 ingest: ## Ingest backend/data/sample_corpus into pgvector (chunks + embeddings)
 	cd backend && PYTHONPATH=src uv run python -m modules.ingestion.cli
 
 contract: ## Regenerate the frontend TS contract from the backend's OpenAPI schema
 	cd frontend && pnpm run contract
+
+contract-check: ## Fail if the committed TS contract has drifted from the backend's OpenAPI schema (CI)
+	cd frontend && pnpm run contract:check
 
 up-langfuse: ## Start the opt-in Langfuse observability stack (web+worker+clickhouse+redis+minio)
 	$(COMPOSE) -f docker-compose.langfuse.yml up -d

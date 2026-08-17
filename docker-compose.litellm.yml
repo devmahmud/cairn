@@ -1,0 +1,62 @@
+# Cairn — opt-in LiteLLM gateway proxy (BLUEPRINT.md §1, §3.13, §8 step 9).
+#
+#   make up-litellm    # docker compose -f docker-compose.litellm.yml up -d
+#
+# Then point the main app at it by setting, in the root `.env`:
+#   OPENAI_BASE_URL=http://localhost:4000
+#   OPENAI_API_KEY=<a LiteLLM virtual key, or LITELLM_MASTER_KEY for local dev>
+# and restart the `backend` service (`docker-compose.yml`).
+#
+# Pinned to an exact, audited tag >= 1.83.10 (BLUEPRINT.md §3.13: 1.82.7/
+# 1.82.8 were a confirmed PyPI supply-chain compromise; several CVEs,
+# including a pre-auth SQLi and a KEV-listed command injection, are fixed
+# only at >=1.83.x). Never float `:main-latest`. Bump this deliberately and
+# re-read LiteLLM's security advisories when you do.
+#
+# `LITELLM_MASTER_KEY` must be set in the root `.env` before this proxy will
+# accept any request (it refuses to boot with an unset/placeholder master
+# key) -- generate one with `openssl rand -hex 32`, the same convention as
+# this repo's own `JWT_SECRET`.
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.83.10-stable
+    restart: unless-stopped
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://litellm:litellm@litellm-db:5432/litellm
+    volumes:
+      - ./backend/litellm.config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/health/liveliness"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  litellm-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+      POSTGRES_DB: litellm
+    ports:
+      - "5434:5432"
+    volumes:
+      - litellm_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  litellm_postgres_data:

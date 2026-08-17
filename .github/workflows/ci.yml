@@ -1,0 +1,137 @@
+# Cairn CI (BLUEPRINT.md §6, §8 step 9).
+#
+# Three independent jobs: `backend` (ruff, ruff format --check, mypy, pytest
+# against a real Postgres service container -- integration-marked tests in
+# `backend/tests/integration/` run for real here, not just skip, §3.11);
+# `frontend` (eslint, tsc, vitest, pnpm build); `contract-drift` (fails the
+# build if the committed `frontend/src/shared/types/api.ts` no longer
+# matches what the backend's OpenAPI schema would generate, §4.3).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (ruff · mypy · pytest)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d app"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # Read by `core.config.Settings` -- points integration tests
+      # (`tests/integration/conftest.py`) at the service container above
+      # instead of `.env.example`'s `localhost`-outside-CI default (same
+      # host here, so this only really pins user/db name explicitly).
+      DATABASE_URL: postgresql+asyncpg://app:app@localhost:5432/app
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies (locked)
+        run: uv sync --locked
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+      - name: mypy
+        run: uv run mypy src
+
+      - name: pytest
+        run: uv run pytest
+
+  frontend:
+    name: Frontend (eslint · tsc · vitest · build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: eslint
+        run: pnpm run lint
+
+      - name: tsc --noEmit
+        run: pnpm run typecheck
+
+      - name: vitest
+        run: pnpm run test
+
+      - name: vite build
+        run: pnpm run build
+
+  contract-drift:
+    name: Contract drift (openapi-typescript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install backend dependencies (locked)
+        run: uv sync --locked
+        working-directory: backend
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+        working-directory: frontend
+
+      - name: make contract-check
+        run: make contract-check
