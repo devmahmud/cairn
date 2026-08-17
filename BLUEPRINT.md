@@ -156,7 +156,7 @@ mis-architected layers. v2 changes:
 | Vector / RAG | **pgvector ≥0.8.2** (HNSW) + **tsvector** FTS approximation + **RRF** | hybrid; iterative scans for filtered search; `≥0.8.2` fixes a parallel-HNSW-build CVE; swap FTS for `pg_search`/`pg_textsearch` when real BM25 (not just tsvector's approximation) matters |
 | Reranker | **`bge-reranker-v2-m3`** (self-hosted, Apache-2.0) | behind the retrieval Protocol; `Qwen3-Reranker` (Apache-2.0) is the current higher-accuracy alternative |
 | Embeddings | **Self-hosted `Qwen3-Embedding-0.6B`** (Apache-2.0), same `OPENAI_BASE_URL` pattern | OpenAI `text-embedding-3-small` kept as an opt-in hosted alternative; `BGE-M3` (MIT) if multilingual/hybrid dense+sparse is needed |
-| Guardrails | **Presidio** (PII, MIT, independently-governed) + **NeMo Guardrails** (Apache-2.0, orchestration) + **Granite Guardian** (Apache-2.0, guard model) | off by default, no-op; Llama Guard is opt-in only — its license is not OSI-approved (§3.12) |
+| Guardrails | **Presidio** (PII, MIT, independently-governed) + **Granite Guardian** (Apache-2.0, guard model, called directly) | off by default, no-op; NeMo Guardrails (Apache-2.0) is a registerable optional orchestration layer on top, not shipped as pre-authored Colang (§3.12); Llama Guard is opt-in only — its license is not OSI-approved |
 | Cache / resume / rate-limit | **Redis 7** | resumable streams, `slowapi`, cache |
 | Observability | **Langfuse** + **structlog** + **`prometheus-fastapi-instrumentator`** | traces + logs + metrics; Langfuse core is MIT self-hosted, EE tier (SCIM/audit-log) is paid |
 | Auth | **`fastapi-users`** (MIT, feature-frozen since v15.0.1 — stable, security-patched) | on by default; conversations are owned per-user, not optional (§3.9) |
@@ -576,9 +576,9 @@ loudly.
 
 **Guard model — license fix from v2:** the default rail model is **`Presidio`** (PII, MIT,
 independently governed under the `data-privacy-stack` org as of mid-2026 — no longer Microsoft-owned)
-plus **`NeMo Guardrails`** (Apache-2.0 orchestration, NVIDIA — canonical repo now
-`github.com/NVIDIA-NeMo/Guardrails`) with **`Granite Guardian`** (IBM, Apache-2.0, current
-prompt-injection-detection leaderboard leader) as the guard/classifier model. **Llama Guard is *not* the
+plus **`Granite Guardian`** (IBM, Apache-2.0, current prompt-injection-detection leaderboard leader) as
+the guard/classifier model, called directly via the same injectable, OpenAI-compatible-endpoint pattern
+used for the main LLM and the reranker — not through a Colang rails engine. **Llama Guard is *not* the
 default** — its "Llama Community License" is not OSI-approved open source: a 700M-MAU commercial cap
 beyond which Meta's grant expires, a binding Acceptable Use Policy, and mandatory "Built with Llama"
 attribution + naming conditions on derivatives, all of which would transitively bind every client this
@@ -586,6 +586,15 @@ template gets forked into. It's kept as an explicit **opt-in** for teams already
 ecosystem, with this license callout surfaced inline wherever it's enabled. (Higher-stakes deployments
 can ensemble a second, non-overlapping guard model — e.g. Granite Guardian for prompt-injection alongside
 a general moderation pass — rather than relying on one classifier for everything.)
+
+**On NeMo Guardrails specifically:** it's Apache-2.0 and still a legitimate choice, but this template does
+**not** ship a pre-authored Colang flow set as the wired-in default. A starter template can responsibly
+ship Python it actually tests; it can't responsibly ship an unverified `.co` rails config and call it "the
+default." The guard-model call's signature (`classify(text, direction) -> RailVerdict`) is deliberately
+simple enough to register as a NeMo custom action (`rails.register_action(classify, name="check_safety")`)
+against a deployment's own Colang flows, for teams that want NeMo's richer multi-flow orchestration layered
+on top — but that's an integration a client fork opts into with their own tested flows, not something this
+template pretends to hand you pre-verified.
 
 OWASP republished the LLM Top 10 on 2026-08-04 with a new methodology (weighted practitioner vote +
 ~6,600 real-world incidents) that reshuffled several ranks and added two categories:
@@ -801,7 +810,7 @@ Each step independently runnable/testable:
 6. **Streaming endpoint** — `sse.py` (id-stamped), `core/stream/resume.py` (Redis bus), `chat_stream.py`
    (custom-writer streaming, session-per-turn UoW, idempotency), simple + durable modes,
    resume/stop endpoints. → `POST /chat` streams; reconnect resumes.
-7. **Guardrails + limits** — `core/guardrails` (no-op default + Presidio/NeMo Guardrails/Granite Guardian hooks, Llama Guard opt-in only),
+7. **Guardrails + limits** — `core/guardrails` (no-op default + Presidio/Granite Guardian hooks, NeMo Guardrails registerable-not-bundled, Llama Guard opt-in only),
    `core/limits` (slowapi + semaphore + budget), auth (wired/optional). → safe to expose.
 8. **Frontend** — Vite scaffold, generic `shared/api` (client + parser + resume), `openapi-typescript`
    contract, `features/chat` (visibility-aware hook + store + components), a11y, one Playwright happy
