@@ -1,0 +1,31 @@
+# Deterministic, zero-dependency input/output-rail patterns (BLUEPRINT.md
+# §3.12, OWASP LLM01) -- layer 1 of `core/guardrails/rails.py`, checked
+# before any guard-model call. Hot-reloaded (§3.2 tier 3,
+# `core/behavior/loader.py`) and overridable cluster-wide via the
+# `config_overrides` table (§3.2 tier 2) with keys of the form
+# `behavior.guardrails.<dotted.path>` -- e.g. an `UPDATE` replacing
+# `behavior.guardrails.deny_patterns` tightens the denylist without editing
+# this file or redeploying.
+#
+# Every entry under `deny_patterns` is a Python `re` pattern, matched with
+# `re.search` (not anchored) against the raw input/output text.
+# Case-insensitivity is opt-in per pattern via an inline `(?i)` flag, not
+# global, so a pattern that genuinely needs to be case-sensitive (a literal
+# delimiter token) isn't forced to ignore case just because most entries
+# here want to.
+
+deny_patterns:
+  - "(?i)ignore (all |any )?(previous|prior|above) instructions"
+  - "(?i)disregard (all |any )?(previous|prior|above) (instructions|rules)"
+  - "(?i)you are now (in |acting as )?(developer|debug|god|dan) mode"
+  - "(?i)reveal (your |the )?(system|hidden) prompt"
+  - "(?i)act as (if )?(you (are|were) )?an? (unfiltered|uncensored|jailbroken) ai"
+  - "(?i)pretend (you have|to have) no (restrictions|guidelines|rules)"
+
+delimiter_markers:
+  - "<|im_start|>"
+  - "<|im_end|>"
+  - "[INST]"
+  - "[/INST]"
+  - "### System:"
+  - "### Instruction:"

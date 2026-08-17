@@ -76,7 +76,11 @@ def build_chat_graph(
 ) -> CompiledStateGraph[ChatState, None, ChatState, ChatState]:
     graph = StateGraph(ChatState)
 
-    graph.add_node("input_rail", InputRailNode(), timeout=5.0)
+    graph.add_node(
+        "input_rail",
+        InputRailNode(behavior_config=behavior_config, app_settings=app_settings),
+        timeout=5.0,
+    )
     graph.add_node(
         "classify",
         ClassifyNode(
@@ -115,7 +119,11 @@ def build_chat_graph(
         timeout=app_settings.TURN_BUDGET_SECONDS,
     )
     graph.add_node("guardrail", GuardrailNode(), timeout=5.0)
-    graph.add_node("output_rail", OutputRailNode(), timeout=5.0)
+    graph.add_node(
+        "output_rail",
+        OutputRailNode(behavior_config=behavior_config, app_settings=app_settings),
+        timeout=5.0,
+    )
 
     graph.add_edge(START, "input_rail")
     graph.add_edge("input_rail", "classify")

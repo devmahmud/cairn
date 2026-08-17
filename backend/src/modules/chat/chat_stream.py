@@ -49,6 +49,7 @@ from agents.chat.agent import ChatAgent
 from agents.chat.nodes.route import VALID_ROUTES
 from core.config import Settings, settings
 from core.errors.exceptions import NotFoundError
+from core.limits.concurrency import limit_concurrent_generations
 from core.stream.resume import RedisStreamBus
 from modules.chat.sse import (
     AgentSwitchEvent,
@@ -80,6 +81,12 @@ _MESSAGES_MODE_NODES = frozenset({"answer", "tool"})
 #: Nodes that push text through `get_stream_writer()` instead of relying on
 #: LangGraph's auto-streamed model events (§3.6, §3.7).
 _CUSTOM_WRITER_NODES = frozenset({"rag"})
+
+#: `state["error"]` codes `agents/chat/nodes/input_rail.py`/`output_rail.py`
+#: set when `core/guardrails/` actually blocked something (§3.12) --
+#: distinguishes a real block from the plain `unclear`-intent case, both of
+#: which route through the same `guardrail` node.
+_GUARDRAIL_BLOCKED_ERRORS = frozenset({"input_rail_blocked", "output_rail_blocked"})
 
 
 @asynccontextmanager
@@ -263,25 +270,33 @@ class ChatStreamer:
         )
         final_state: dict[str, Any] = {}
         try:
-            async for mode, payload in self._chat_agent.astream(
-                conversation_id=turn.conversation_id, user_id=turn.user_id, text=turn.text
-            ):
-                if mode == "timeout":
-                    if isinstance(payload, Mapping):
-                        final_state.update(payload)
-                    yield ErrorEvent(
-                        code="turn_budget_exceeded",
-                        message=str(final_state.get("answer") or _GENERIC_ERROR_MESSAGE),
-                    )
-                    break
+            # `asyncio.Semaphore`-backed concurrency cap (§3.10, §3.13) --
+            # bounds how many turns are mid-generation (the actual LLM/graph
+            # work) at once, process-wide. Held for exactly this loop, the
+            # one piece of `_run_turn` both simple- and durable-mode share
+            # (this method's own docstring) -- not around persistence
+            # (`_persist_reply`, below) or SSE tailing, neither of which is
+            # "a generation".
+            async with limit_concurrent_generations():
+                async for mode, payload in self._chat_agent.astream(
+                    conversation_id=turn.conversation_id, user_id=turn.user_id, text=turn.text
+                ):
+                    if mode == "timeout":
+                        if isinstance(payload, Mapping):
+                            final_state.update(payload)
+                        yield ErrorEvent(
+                            code="turn_budget_exceeded",
+                            message=str(final_state.get("answer") or _GENERIC_ERROR_MESSAGE),
+                        )
+                        break
 
-                for event in translator.handle(mode, payload):
-                    yield event
+                    for event in translator.handle(mode, payload):
+                        yield event
 
-                if mode == "updates" and isinstance(payload, Mapping):
-                    for update in payload.values():
-                        if update:
-                            final_state.update(update)
+                    if mode == "updates" and isinstance(payload, Mapping):
+                        for update in payload.values():
+                            if update:
+                                final_state.update(update)
         except Exception:
             logger.exception("chat_stream.turn_failed", conversation_id=str(turn.conversation_id))
             yield ErrorEvent(code="stream_failed", message=_GENERIC_ERROR_MESSAGE)
@@ -455,7 +470,13 @@ class _EventTranslator:
         events: list[ChatSSEEvent] = []
 
         if node_name == "guardrail":
-            events.append(GuardrailEvent(action="clarify", message=str(update.get("answer") or "")))
+            # `"refuse"` when `input_rail`/`output_rail` actually blocked
+            # something (`core/guardrails/`, §3.12); `"clarify"` for the
+            # plain low-confidence/`unclear`-intent case -- both still land
+            # on this same node (`agents/chat/nodes/guardrail.py`), which is
+            # the one place that knows which happened.
+            action = "refuse" if update.get("error") in _GUARDRAIL_BLOCKED_ERRORS else "clarify"
+            events.append(GuardrailEvent(action=action, message=str(update.get("answer") or "")))
 
         error = update.get("error")
         if error:

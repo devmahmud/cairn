@@ -7,6 +7,13 @@ overridable, §3.2) and dispatch to its mapped `route`. Below
 `default_route` -- exactly `routing.yaml`'s own header comment, which this
 node is the deterministic implementation of. The conditional edge out of
 `route` (`agents/chat/graph.py`) reads `state["route"]` this node sets.
+
+One override ahead of that lookup, added in §8 step 7: if `input_rail`
+(`agents/chat/nodes/input_rail.py`) blocked this turn (`state["error"] ==
+"input_rail_blocked"`), route straight to `guardrail` regardless of
+whatever `classify` produced on the now-empty input -- `classify` still
+ran (the graph's edges are fixed, §3.6), but its result is meaningless for
+a blocked message and must not be allowed to route around the block.
 """
 
 from __future__ import annotations
@@ -32,6 +39,9 @@ class RouteNode(GraphNode[ChatState]):
         self._behavior_config = behavior_config
 
     async def __call__(self, state: ChatState) -> dict[str, Any]:
+        if state.get("error") == "input_rail_blocked":
+            return {"route": "guardrail"}
+
         routing = await self._behavior_config.get("routing")
         default_route = _coerce_route(routing.get("default_route"), fallback="rag")
         confidence_threshold = float(routing.get("confidence_threshold", 0.0))

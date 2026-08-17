@@ -15,12 +15,16 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
 from prometheus_fastapi_instrumentator import Instrumentator
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.cors import CORSMiddleware
 
 from core.config import settings
 from core.db.engine import engine
 from core.di.container import container
 from core.errors.handlers import register_exception_handlers
+from core.limits.rate_limit import limiter
 from core.middleware.request_id import RequestIDMiddleware
 from core.observability.logging import configure_logging
 from core.prompts.watcher import watch_and_reload
@@ -114,6 +118,18 @@ app.add_middleware(
 # Pure-ASGI, not `BaseHTTPMiddleware` -- see the module docstring in
 # `core/middleware/request_id.py` for why that distinction matters here.
 app.add_middleware(RequestIDMiddleware)
+
+# `slowapi` per-user/IP rate limiting (§3.10, §3.13) -- a no-op-in-effect
+# `Limiter` (its own `RATE_LIMIT_PER_MIN=0`-gated decorator) when limiting
+# is off, so this wiring is unconditional; only `modules/chat/router.py`'s
+# `@chat_rate_limit` decorator on `/chat` actually enforces anything.
+app.state.limiter = limiter
+# `slowapi`'s handler is typed narrowly (`RateLimitExceeded`, not the
+# `Exception` base `add_exception_handler` expects) -- a real, common
+# variance mismatch between slowapi and Starlette's typed exception-handler
+# signature, not a bug here.
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+app.add_middleware(SlowAPIMiddleware)
 
 register_exception_handlers(app)
 

@@ -1,34 +1,63 @@
-"""Input guardrail hook -- shape-correct, pass-through today (BLUEPRINT.md §3.6, §3.12).
+"""Input guardrail hook -- real rails, no-op unless `GUARDRAILS_ENABLED` (BLUEPRINT.md §3.6, §3.12).
 
-Real guardrail logic -- Presidio PII redaction and Granite Guardian/NeMo
-Guardrails prompt-injection screening on `state["input"]` before it reaches
-`classify`/`answer`/`rag` (OWASP LLM01/LLM02, §3.12) -- is §8 step 7's job
-entirely. This node exists now so the graph's edges
-(`START -> input_rail -> classify -> ...`) are final before that step lands,
-and so step 7's implementation is a body swap in this one file, not a graph
-rewire.
+Delegates to `core/guardrails/rails.py::input_rail` -- the deterministic
+denylist, PII redaction, and (if `GUARDIAN_MODEL_BASE_URL` is set) Granite
+Guardian classification described there. This node's own job is just
+threading graph state through that call and reacting to its verdict.
 
-Deliberately not gated on `GUARDRAILS_ENABLED`: there is no guard model
-wired in yet to gate, so this is an unconditional pass-through regardless of
-the setting -- gating it today would just be dead code with an inert
-"enabled" flag.
+**Not a graph rewire** (per this file's own prior-step docstring, preserved
+here): `START -> input_rail -> classify -> route -> ...` is a fixed edge
+set, so a blocked input can't short-circuit straight to `guardrail` from
+here. Instead: a block clears `state["input"]` (nothing raw/unsafe should
+reach `classify`/`answer`/`rag` even as a fallback) and sets
+`state["error"] = "input_rail_blocked"`, which `route.py` checks *before*
+its normal `routing.yaml` lookup and sends to the `guardrail` branch. The
+one real cost of this shape: `classify` still runs once, on an empty
+question, before `route` redirects -- a documented tradeoff (a wasted,
+harmless LLM call) rather than a graph restructure.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
+from langchain_core.language_models import BaseChatModel
+
 from agents.base import GraphNode
+from agents.chat.nodes._protocols import BehaviorSource
 from agents.chat.state import ChatState
 from agents.registry import register
+from core.config import Settings, settings
+from core.guardrails.rails import input_rail
 
 
 @register
 class InputRailNode(GraphNode[ChatState]):
     name = "input_rail"
 
+    def __init__(
+        self,
+        *,
+        behavior_config: BehaviorSource,
+        app_settings: Settings = settings,
+        guardian_model_factory: Callable[[Settings], BaseChatModel] | None = None,
+    ) -> None:
+        self._behavior_config = behavior_config
+        self._settings = app_settings
+        self._guardian_model_factory = guardian_model_factory
+
     async def __call__(self, state: ChatState) -> dict[str, Any]:
-        # Step 7 belongs here -- redact/screen `state["input"]` and either
-        # pass it through unchanged or route straight to `guardrail`
-        # (e.g. by setting `route` and short-circuiting classify/route).
+        original = state.get("input", "")
+        verdict = await input_rail(
+            original,
+            behavior_config=self._behavior_config,
+            app_settings=self._settings,
+            guardian_model_factory=self._guardian_model_factory,
+        )
+
+        if verdict.blocked:
+            return {"input": "", "error": "input_rail_blocked"}
+        if verdict.text != original:
+            return {"input": verdict.text}
         return {}

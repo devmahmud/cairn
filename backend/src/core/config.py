@@ -46,9 +46,40 @@ class Settings(BaseSettings):
     TURN_BUDGET_SECONDS: float = 90.0
     AUTH_ENABLED: bool = True
     JWT_SECRET: str = "change-me"
+    # `fastapi-users`' `JWTStrategy` lifetime (`modules/auth/users.py`) --
+    # short-lived by design, since `core/security/current_user.py` verifies
+    # access tokens statelessly (no DB round trip); the revocable
+    # `refresh_tokens` table bounds exposure past this window instead.
+    ACCESS_TOKEN_LIFETIME_SECONDS: int = 3600
+    REFRESH_TOKEN_LIFETIME_SECONDS: int = 60 * 60 * 24 * 30
     LANGFUSE_ENABLED: bool = False
     LANGFUSE_PROMPTS: bool = False
     SESSION_SWEEPER_ENABLED: bool = False
+
+    # --- Guardrails (§3.12) ---------------------------------------------
+    # Granite Guardian (IBM, Apache-2.0) as the guard/classifier model --
+    # self-hosted, OpenAI-compatible-endpoint pattern (same shape as
+    # `RERANKER_BASE_URL`, §3.8): blank degrades to the deterministic
+    # denylist + PII layers only, even with `GUARDRAILS_ENABLED=true`
+    # (`core/guardrails/rails.py`).
+    GUARDIAN_MODEL_BASE_URL: str = ""
+    GUARDIAN_MODEL_NAME: str = "granite-guardian-3.3-8b"
+    GUARDIAN_MODEL_RISK_NAME: str = "jailbreak"
+    GUARDIAN_MODEL_TIMEOUT_SECONDS: float = 10.0
+    # Llama Guard is opt-in ONLY, gated on a flag independent of
+    # `GUARDRAILS_ENABLED` -- see `core/guardrails/llama_guard.py`'s module
+    # docstring for the license caveat (not OSI-approved open source) that
+    # is the entire reason this isn't reachable via `GUARDRAILS_ENABLED`
+    # alone (§3.12).
+    GUARDRAILS_LLAMA_GUARD_OPT_IN: bool = False
+    LLAMA_GUARD_MODEL_BASE_URL: str = ""
+    LLAMA_GUARD_MODEL_NAME: str = "llama-guard-3-8b"
+
+    # --- Limits (§3.10, §3.13) -------------------------------------------
+    # `asyncio.Semaphore` cap on in-flight generations
+    # (`core/limits/concurrency.py`), independent of `RATE_LIMIT_PER_MIN`
+    # (an HTTP-request-rate limit, not a concurrency cap).
+    MAX_CONCURRENT_GENERATIONS: int = 10
     # Not part of the §3.2 snippet's core list either, but needed as soon as
     # `LANGFUSE_PROMPTS=true` asks `core/prompts/engine.py` to actually reach
     # a self-hosted Langfuse instance (§3.5) -- already documented in

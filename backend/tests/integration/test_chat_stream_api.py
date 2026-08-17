@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -35,10 +36,11 @@ from asgi_lifespan import LifespanManager
 from dependency_injector import providers
 from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 pytestmark = pytest.mark.integration
+
+_PASSWORD = "correct horse battery staple"
 
 
 def _parse_sse(body: str) -> list[dict[str, Any]]:
@@ -70,22 +72,32 @@ async def client(db_engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
             yield async_client
 
 
+@dataclass(frozen=True, slots=True)
+class AuthedUser:
+    id: uuid.UUID
+    access_token: str
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.access_token}"}
+
+
 @pytest_asyncio.fixture
-async def user_id(db_engine: AsyncEngine) -> uuid.UUID:
-    new_id = uuid.uuid4()
-    async with db_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (id, email, hashed_password) "
-                "VALUES (:id, :email, :hashed_password)"
-            ),
-            {"id": new_id, "email": f"{new_id}@example.com", "hashed_password": "x"},
-        )
-    return new_id
+async def user(client: AsyncClient) -> AuthedUser:
+    """Registers + logs in a real user through the auth API (§8 step 7) --
+    not a raw `users` row insert, same reasoning as
+    `tests/integration/test_conversations_api.py`'s identical fixture."""
+    email = f"{uuid.uuid4()}@example.com"
+    register_resp = await client.post(
+        "/auth/register", json={"email": email, "password": _PASSWORD}
+    )
+    assert register_resp.status_code == 201, register_resp.text
+    user_id = uuid.UUID(register_resp.json()["id"])
 
+    login_resp = await client.post("/auth/login", data={"username": email, "password": _PASSWORD})
+    assert login_resp.status_code == 200, login_resp.text
 
-def _auth_headers(user_id: uuid.UUID) -> dict[str, str]:
-    return {"X-User-Id": str(user_id)}
+    return AuthedUser(id=user_id, access_token=login_resp.json()["access_token"])
 
 
 @pytest.fixture
@@ -133,18 +145,18 @@ def _greeting_fakes() -> dict[str, Any]:
 
 
 async def test_chat_turn_streams_a_well_formed_sequence_and_persists_both_messages(
-    client: AsyncClient, user_id: uuid.UUID, fake_chat_agent: Any
+    client: AsyncClient, user: AuthedUser, fake_chat_agent: Any
 ) -> None:
     fake_chat_agent(_greeting_fakes())
 
     conversation_id = (
-        await client.post("/conversations", json={"title": "Chat"}, headers=_auth_headers(user_id))
+        await client.post("/conversations", json={"title": "Chat"}, headers=user.headers)
     ).json()["id"]
 
     resp = await client.post(
         "/chat",
         json={"conversation_id": conversation_id, "text": "hello!"},
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
 
     assert resp.status_code == 200
@@ -158,7 +170,7 @@ async def test_chat_turn_streams_a_well_formed_sequence_and_persists_both_messag
     assert events[3]["data"]["text"] == "Hi there! How can I help?"
 
     messages_resp = await client.get(
-        f"/conversations/{conversation_id}/messages", headers=_auth_headers(user_id)
+        f"/conversations/{conversation_id}/messages", headers=user.headers
     )
     items = messages_resp.json()["items"]
     assert [m["role"] for m in items] == ["assistant", "user"]  # newest-first (§3.3)
@@ -167,21 +179,21 @@ async def test_chat_turn_streams_a_well_formed_sequence_and_persists_both_messag
 
 
 async def test_chat_turn_requires_an_owned_conversation(
-    client: AsyncClient, user_id: uuid.UUID, fake_chat_agent: Any
+    client: AsyncClient, user: AuthedUser, fake_chat_agent: Any
 ) -> None:
     fake_chat_agent(_greeting_fakes())
 
     resp = await client.post(
         "/chat",
         json={"conversation_id": str(uuid.uuid4()), "text": "hello!"},
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
 
     assert resp.status_code == 404
 
 
 async def test_idempotent_retry_replays_instead_of_rerunning_the_graph(
-    client: AsyncClient, user_id: uuid.UUID, fake_chat_agent: Any
+    client: AsyncClient, user: AuthedUser, fake_chat_agent: Any
 ) -> None:
     from agents.chat.schemas import ClassifyResult
     from tests.unit.fakes import FakeChatModel
@@ -200,12 +212,12 @@ async def test_idempotent_retry_replays_instead_of_rerunning_the_graph(
     )
 
     conversation_id = (
-        await client.post("/conversations", json={"title": "Chat"}, headers=_auth_headers(user_id))
+        await client.post("/conversations", json={"title": "Chat"}, headers=user.headers)
     ).json()["id"]
     payload = {"conversation_id": conversation_id, "text": "hello!", "idempotency_key": "turn-1"}
 
-    first = await client.post("/chat", json=payload, headers=_auth_headers(user_id))
-    second = await client.post("/chat", json=payload, headers=_auth_headers(user_id))
+    first = await client.post("/chat", json=payload, headers=user.headers)
+    second = await client.post("/chat", json=payload, headers=user.headers)
 
     assert first.status_code == second.status_code == 200
     first_events = _parse_sse(first.text)
@@ -215,7 +227,7 @@ async def test_idempotent_retry_replays_instead_of_rerunning_the_graph(
     assert second_events[1]["data"]["text"] == first_events[3]["data"]["text"]
 
     messages_resp = await client.get(
-        f"/conversations/{conversation_id}/messages", headers=_auth_headers(user_id)
+        f"/conversations/{conversation_id}/messages", headers=user.headers
     )
     # Exactly one user + one assistant message -- the retry never re-ran the
     # graph or double-inserted (§3.3).
@@ -223,12 +235,12 @@ async def test_idempotent_retry_replays_instead_of_rerunning_the_graph(
 
 
 async def test_durable_endpoints_404_when_stream_durable_is_disabled(
-    client: AsyncClient, user_id: uuid.UUID
+    client: AsyncClient, user: AuthedUser
 ) -> None:
     stream_id = uuid.uuid4().hex
 
-    resume_resp = await client.get(f"/chat/stream/{stream_id}", headers=_auth_headers(user_id))
-    stop_resp = await client.post(f"/chat/stream/{stream_id}/stop", headers=_auth_headers(user_id))
+    resume_resp = await client.get(f"/chat/stream/{stream_id}", headers=user.headers)
+    stop_resp = await client.post(f"/chat/stream/{stream_id}/stop", headers=user.headers)
 
     assert resume_resp.status_code == 404
     assert stop_resp.status_code == 404
@@ -285,16 +297,16 @@ async def durable_streamer(fake_chat_agent: Any) -> AsyncIterator[None]:
 
 
 async def test_durable_chat_turn_returns_a_stream_id_and_embeds_it_in_message_start(
-    client: AsyncClient, user_id: uuid.UUID, durable_streamer: None
+    client: AsyncClient, user: AuthedUser, durable_streamer: None
 ) -> None:
     conversation_id = (
-        await client.post("/conversations", json={"title": "Chat"}, headers=_auth_headers(user_id))
+        await client.post("/conversations", json={"title": "Chat"}, headers=user.headers)
     ).json()["id"]
 
     resp = await client.post(
         "/chat",
         json={"conversation_id": conversation_id, "text": "hello!"},
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
 
     assert resp.status_code == 200
@@ -307,16 +319,16 @@ async def test_durable_chat_turn_returns_a_stream_id_and_embeds_it_in_message_st
 
 
 async def test_durable_resume_from_last_event_id_skips_already_seen_events(
-    client: AsyncClient, user_id: uuid.UUID, durable_streamer: None
+    client: AsyncClient, user: AuthedUser, durable_streamer: None
 ) -> None:
     conversation_id = (
-        await client.post("/conversations", json={"title": "Chat"}, headers=_auth_headers(user_id))
+        await client.post("/conversations", json={"title": "Chat"}, headers=user.headers)
     ).json()["id"]
 
     first = await client.post(
         "/chat",
         json={"conversation_id": conversation_id, "text": "hello!"},
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
     stream_id = first.headers["x-stream-id"]
     first_events = _parse_sse(first.text)
@@ -331,7 +343,7 @@ async def test_durable_resume_from_last_event_id_skips_already_seen_events(
     resumed = await client.get(
         f"/chat/stream/{stream_id}",
         params={"last_event_id": "2"},
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
 
     assert resumed.status_code == 200
@@ -343,15 +355,15 @@ async def test_durable_resume_from_last_event_id_skips_already_seen_events(
 
 
 async def test_durable_stop_then_unknown_stream_id_is_404(
-    client: AsyncClient, user_id: uuid.UUID, durable_streamer: None
+    client: AsyncClient, user: AuthedUser, durable_streamer: None
 ) -> None:
     conversation_id = (
-        await client.post("/conversations", json={"title": "Chat"}, headers=_auth_headers(user_id))
+        await client.post("/conversations", json={"title": "Chat"}, headers=user.headers)
     ).json()["id"]
     started = await client.post(
         "/chat",
         json={"conversation_id": conversation_id, "text": "hello!"},
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
     stream_id = started.headers["x-stream-id"]
 
@@ -359,10 +371,8 @@ async def test_durable_stop_then_unknown_stream_id_is_404(
     # time the response body is fully read -- stopping it now exercises
     # "stream known, producer already done" rather than a live cancel, but
     # still proves `/stop` resolves a real `stream_id` to `204`.
-    stop_resp = await client.post(f"/chat/stream/{stream_id}/stop", headers=_auth_headers(user_id))
+    stop_resp = await client.post(f"/chat/stream/{stream_id}/stop", headers=user.headers)
     assert stop_resp.status_code == 204
 
-    unknown_resp = await client.post(
-        f"/chat/stream/{uuid.uuid4().hex}/stop", headers=_auth_headers(user_id)
-    )
+    unknown_resp = await client.post(f"/chat/stream/{uuid.uuid4().hex}/stop", headers=user.headers)
     assert unknown_resp.status_code == 404

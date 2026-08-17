@@ -16,8 +16,26 @@ response begins -- see `chat_stream.py`'s module docstring for why a bad
 `conversation_id` needs to fail there, not inside the generator, to still
 come back as a normal `404`. Protected by the same `get_current_user_id`
 abstraction the `conversations` module depends on (§3.9); real auth (§8 step
-7) upgrades that one function for every router at once, this one included --
-this module never hand-rolls its own auth check.
+7) resolves that one function from a verified JWT for every router at once,
+this one included -- this module never hand-rolls its own auth check.
+
+`@chat_rate_limit` (`core/limits/rate_limit.py`, §3.10/§3.13 -- a
+per-user/IP `slowapi` limit, a plain pass-through when
+`RATE_LIMIT_PER_MIN=0`, the local-dev default) decorates `_start_chat_turn`
+below, **not** `start_chat_turn` itself -- `slowapi`'s decorator awaits the
+wrapped callable to get its return value, which is exactly wrong for an
+async-*generator* SSE endpoint (FastAPI detects streaming endpoints via
+`inspect.isasyncgenfunction`, a property the decorator's wrapper doesn't
+have). `_start_chat_turn` is already a plain coroutine dependency that
+runs *before* the SSE response begins (same reason `begin_turn` lives
+there, see its own docstring below) -- a rate-limit rejection landing
+there comes back as a clean `429`, not a mid-stream SSE error event, for
+the same reason a bad `conversation_id` needs to.
+
+The concurrency cap (`core/limits/concurrency.py`) lives one layer further
+down, in `chat_stream.py::ChatStreamer._run_turn`, since that's the one
+generator both simple- and durable-mode share -- this router only owns the
+HTTP-request-rate concern.
 """
 
 from __future__ import annotations
@@ -27,11 +45,12 @@ from dataclasses import dataclass
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from core.di.container import container as di_container
 from core.errors.exceptions import NotFoundError
+from core.limits.rate_limit import chat_rate_limit
 from core.security.current_user import get_current_user_id
 from modules.chat.chat_stream import (
     ChatStreamer,
@@ -66,8 +85,13 @@ class _TurnHandle:
     stream_id: str | None
 
 
+@chat_rate_limit
 async def _start_chat_turn(
-    payload: ChatTurnRequest, streamer: StreamerDep, user_id: UserIdDep, response: Response
+    request: Request,
+    payload: ChatTurnRequest,
+    streamer: StreamerDep,
+    user_id: UserIdDep,
+    response: Response,
 ) -> _TurnHandle:
     """Validates the turn *and* (durable mode) spawns its producer + sets
     `X-Stream-Id` -- all as a dependency, not inside `start_chat_turn`'s

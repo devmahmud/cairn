@@ -1,24 +1,33 @@
-"""Integration tests for the conversations REST API (BLUEPRINT.md §8 step 3).
+"""Integration tests for the conversations REST API (BLUEPRINT.md §8 step 3, §8 step 7).
 
 End-to-end: the real ASGI app (`main.app`, full lifespan driven by
 `asgi-lifespan`) against a real, migrated Postgres. Needs a reachable
 database -- see `tests/integration/conftest.py` for how to point one at
 these tests and how they skip cleanly without one.
+
+Authenticates through the real `/auth/register` + `/auth/login` endpoints
+(§8 step 7) -- not a client-supplied `X-User-Id` header (phase 1's interim
+stub, `core/security/current_user.py`'s previous revision). This is what
+makes `test_conversation_is_not_visible_to_a_different_user` below a
+genuine test of ownership scoping against a *real* authenticated identity,
+not just a header a malicious client could equally well have forged.
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 
 import pytest
 import pytest_asyncio
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 pytestmark = pytest.mark.integration
+
+_PASSWORD = "correct horse battery staple"
 
 
 @pytest_asyncio.fixture
@@ -35,40 +44,65 @@ async def client(db_engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
             yield async_client
 
 
+@dataclass(frozen=True, slots=True)
+class AuthedUser:
+    id: uuid.UUID
+    access_token: str
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.access_token}"}
+
+
+#: `register_user`'s type -- `...` (not a fixed arg list) since `_register`
+#: below takes an optional `email` with a default, and `Callable[[str |
+#: None], ...]` would force every call site to pass one anyway.
+RegisterUser = Callable[..., Awaitable[AuthedUser]]
+
+
 @pytest_asyncio.fixture
-async def user_id(db_engine: AsyncEngine) -> uuid.UUID:
-    """A real `users` row -- `conversations.user_id` has a hard FK to it.
-
-    The auth module (§8 step 7) doesn't exist yet, so this seeds the row
-    directly instead of registering through an API that isn't built.
+async def register_user(client: AsyncClient) -> RegisterUser:
+    """A factory (not a single value) so tests that need >1 real user
+    (`test_conversation_is_not_visible_to_a_different_user`) can call this
+    more than once, each time registering + logging in through the real
+    API rather than seeding a `users` row directly.
     """
-    new_id = uuid.uuid4()
-    async with db_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (id, email, hashed_password) "
-                "VALUES (:id, :email, :hashed_password)"
-            ),
-            {"id": new_id, "email": f"{new_id}@example.com", "hashed_password": "x"},
+
+    async def _register(email: str | None = None) -> AuthedUser:
+        email = email or f"{uuid.uuid4()}@example.com"
+        register_resp = await client.post(
+            "/auth/register", json={"email": email, "password": _PASSWORD}
         )
-    return new_id
+        assert register_resp.status_code == 201, register_resp.text
+        user_id = uuid.UUID(register_resp.json()["id"])
+
+        login_resp = await client.post(
+            "/auth/login", data={"username": email, "password": _PASSWORD}
+        )
+        assert login_resp.status_code == 200, login_resp.text
+        access_token: str = login_resp.json()["access_token"]
+
+        return AuthedUser(id=user_id, access_token=access_token)
+
+    return _register
 
 
-def _auth_headers(user_id: uuid.UUID) -> dict[str, str]:
-    return {"X-User-Id": str(user_id)}
+@pytest_asyncio.fixture
+async def user(register_user: RegisterUser) -> AuthedUser:
+    return await register_user()
 
 
-async def test_create_and_get_conversation(client: AsyncClient, user_id: uuid.UUID) -> None:
+async def test_create_and_get_conversation(client: AsyncClient, user: AuthedUser) -> None:
     create_resp = await client.post(
-        "/conversations", json={"title": "First chat"}, headers=_auth_headers(user_id)
+        "/conversations", json={"title": "First chat"}, headers=user.headers
     )
     assert create_resp.status_code == 201
     created = create_resp.json()
     assert created["title"] == "First chat"
     assert created["status"] == "active"
-    assert created["user_id"] == str(user_id)
+    assert created["user_id"] == str(user.id)
 
-    get_resp = await client.get(f"/conversations/{created['id']}", headers=_auth_headers(user_id))
+    get_resp = await client.get(f"/conversations/{created['id']}", headers=user.headers)
     assert get_resp.status_code == 200
     assert get_resp.json() == created
 
@@ -78,45 +112,33 @@ async def test_missing_auth_header_is_rejected(client: AsyncClient) -> None:
     assert resp.status_code == 401
 
 
-async def test_get_nonexistent_conversation_is_404(client: AsyncClient, user_id: uuid.UUID) -> None:
-    resp = await client.get(f"/conversations/{uuid.uuid4()}", headers=_auth_headers(user_id))
+async def test_get_nonexistent_conversation_is_404(client: AsyncClient, user: AuthedUser) -> None:
+    resp = await client.get(f"/conversations/{uuid.uuid4()}", headers=user.headers)
     assert resp.status_code == 404
 
 
 async def test_conversation_is_not_visible_to_a_different_user(
-    client: AsyncClient, user_id: uuid.UUID, db_engine: AsyncEngine
+    client: AsyncClient, user: AuthedUser, register_user: RegisterUser
 ) -> None:
-    other_user_id = uuid.uuid4()
-    async with db_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO users (id, email, hashed_password) "
-                "VALUES (:id, :email, :hashed_password)"
-            ),
-            {"id": other_user_id, "email": f"{other_user_id}@example.com", "hashed_password": "x"},
-        )
+    other = await register_user()
 
-    create_resp = await client.post(
-        "/conversations", json={"title": "Mine"}, headers=_auth_headers(user_id)
-    )
+    create_resp = await client.post("/conversations", json={"title": "Mine"}, headers=user.headers)
     conversation_id = create_resp.json()["id"]
 
-    resp = await client.get(
-        f"/conversations/{conversation_id}", headers=_auth_headers(other_user_id)
-    )
+    resp = await client.get(f"/conversations/{conversation_id}", headers=other.headers)
     assert resp.status_code == 404
 
 
-async def test_update_conversation(client: AsyncClient, user_id: uuid.UUID) -> None:
+async def test_update_conversation(client: AsyncClient, user: AuthedUser) -> None:
     create_resp = await client.post(
-        "/conversations", json={"title": "Original"}, headers=_auth_headers(user_id)
+        "/conversations", json={"title": "Original"}, headers=user.headers
     )
     conversation_id = create_resp.json()["id"]
 
     patch_resp = await client.patch(
         f"/conversations/{conversation_id}",
         json={"status": "archived"},
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
     assert patch_resp.status_code == 200
     updated = patch_resp.json()
@@ -124,33 +146,27 @@ async def test_update_conversation(client: AsyncClient, user_id: uuid.UUID) -> N
     assert updated["title"] == "Original"  # untouched
 
 
-async def test_delete_conversation_then_404(client: AsyncClient, user_id: uuid.UUID) -> None:
-    create_resp = await client.post(
-        "/conversations", json={"title": "Temp"}, headers=_auth_headers(user_id)
-    )
+async def test_delete_conversation_then_404(client: AsyncClient, user: AuthedUser) -> None:
+    create_resp = await client.post("/conversations", json={"title": "Temp"}, headers=user.headers)
     conversation_id = create_resp.json()["id"]
 
-    delete_resp = await client.delete(
-        f"/conversations/{conversation_id}", headers=_auth_headers(user_id)
-    )
+    delete_resp = await client.delete(f"/conversations/{conversation_id}", headers=user.headers)
     assert delete_resp.status_code == 204
 
-    get_resp = await client.get(f"/conversations/{conversation_id}", headers=_auth_headers(user_id))
+    get_resp = await client.get(f"/conversations/{conversation_id}", headers=user.headers)
     assert get_resp.status_code == 404
 
 
 async def test_list_conversations_paginates_with_a_default_limit(
-    client: AsyncClient, user_id: uuid.UUID
+    client: AsyncClient, user: AuthedUser
 ) -> None:
     for i in range(3):
         resp = await client.post(
-            "/conversations", json={"title": f"Chat {i}"}, headers=_auth_headers(user_id)
+            "/conversations", json={"title": f"Chat {i}"}, headers=user.headers
         )
         assert resp.status_code == 201
 
-    first_page = await client.get(
-        "/conversations", params={"limit": 2}, headers=_auth_headers(user_id)
-    )
+    first_page = await client.get("/conversations", params={"limit": 2}, headers=user.headers)
     assert first_page.status_code == 200
     first_body = first_page.json()
     assert len(first_body["items"]) == 2
@@ -159,7 +175,7 @@ async def test_list_conversations_paginates_with_a_default_limit(
     second_page = await client.get(
         "/conversations",
         params={"limit": 2, "cursor": first_body["next_cursor"]},
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
     assert second_page.status_code == 200
     second_body = second_page.json()
@@ -172,17 +188,15 @@ async def test_list_conversations_paginates_with_a_default_limit(
     assert len(all_ids) == 3
 
 
-async def test_create_and_list_messages(client: AsyncClient, user_id: uuid.UUID) -> None:
+async def test_create_and_list_messages(client: AsyncClient, user: AuthedUser) -> None:
     conversation_id = (
-        await client.post(
-            "/conversations", json={"title": "With messages"}, headers=_auth_headers(user_id)
-        )
+        await client.post("/conversations", json={"title": "With messages"}, headers=user.headers)
     ).json()["id"]
 
     create_resp = await client.post(
         f"/conversations/{conversation_id}/messages",
         json={"role": "user", "content": "Hello there"},
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
     assert create_resp.status_code == 201
     message = create_resp.json()
@@ -191,9 +205,7 @@ async def test_create_and_list_messages(client: AsyncClient, user_id: uuid.UUID)
     assert message["artifacts"] == []
     assert message["citations"] == []
 
-    list_resp = await client.get(
-        f"/conversations/{conversation_id}/messages", headers=_auth_headers(user_id)
-    )
+    list_resp = await client.get(f"/conversations/{conversation_id}/messages", headers=user.headers)
     assert list_resp.status_code == 200
     items = list_resp.json()["items"]
     assert len(items) == 1
@@ -201,25 +213,23 @@ async def test_create_and_list_messages(client: AsyncClient, user_id: uuid.UUID)
 
 
 async def test_messages_require_an_owned_conversation(
-    client: AsyncClient, user_id: uuid.UUID
+    client: AsyncClient, user: AuthedUser
 ) -> None:
     resp = await client.post(
         f"/conversations/{uuid.uuid4()}/messages",
         json={"role": "user", "content": "hi"},
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
     assert resp.status_code == 404
 
 
-async def test_idempotent_message_retry_is_a_no_op(client: AsyncClient, user_id: uuid.UUID) -> None:
+async def test_idempotent_message_retry_is_a_no_op(client: AsyncClient, user: AuthedUser) -> None:
     """The client `idempotency_key` (§3.3) makes a retried POST a no-op --
     never a duplicate message -- honoring the migration's partial unique
     index on `(conversation_id, idempotency_key)`.
     """
     conversation_id = (
-        await client.post(
-            "/conversations", json={"title": "Idempotent"}, headers=_auth_headers(user_id)
-        )
+        await client.post("/conversations", json={"title": "Idempotent"}, headers=user.headers)
     ).json()["id"]
 
     payload = {"role": "user", "content": "retry me", "idempotency_key": "turn-1"}
@@ -227,18 +237,16 @@ async def test_idempotent_message_retry_is_a_no_op(client: AsyncClient, user_id:
     first_resp = await client.post(
         f"/conversations/{conversation_id}/messages",
         json=payload,
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
     second_resp = await client.post(
         f"/conversations/{conversation_id}/messages",
         json=payload,
-        headers=_auth_headers(user_id),
+        headers=user.headers,
     )
     assert first_resp.status_code == 201
     assert second_resp.status_code == 201
     assert first_resp.json()["id"] == second_resp.json()["id"]
 
-    list_resp = await client.get(
-        f"/conversations/{conversation_id}/messages", headers=_auth_headers(user_id)
-    )
+    list_resp = await client.get(f"/conversations/{conversation_id}/messages", headers=user.headers)
     assert len(list_resp.json()["items"]) == 1

@@ -2,17 +2,24 @@
 
 Maps onto the `conversations` / `messages` tables the initial migration
 already created (`alembic/versions/7fb143f2218e_initial_schema.py`) -- this
-file does not create or alter schema. `users` is referenced by FK but
-deliberately not mapped as a full ORM class here: the `users` table belongs
-to the not-yet-built auth module (§8 step 7), and mapping it fully here
-would put a domain model outside the module that owns it. It still needs
-*some* `Table` registered under that name in `Base.metadata`, though --
-SQLAlchemy's unit-of-work resolves every FK's target table at flush/
-insert-ordering time, not just at DDL-generation time, so a bare
-`ForeignKey("users.id")` string with no matching table in the same
-metadata raises `NoReferencedTableError` the moment a `Conversation` is
-ever inserted. `_users_table` below is that minimal stand-in -- see its
-docstring for how step 7 should reconcile it with the real `User` model.
+file does not create or alter schema. `users` is referenced by FK
+(`Conversation.user_id`) but deliberately not mapped as a full ORM class
+here: the real `User` model belongs to `modules/auth/models.py`, the module
+that owns that table (§8 step 7).
+
+Nothing here imports `modules.auth.models` to make that FK resolvable --
+it doesn't need to. SQLAlchemy resolves a string `ForeignKey`'s target
+table lazily, at flush/mapper-configuration time, not at class-definition
+time (its own unit-of-work needs to know insert/dependency ordering
+between tables, which is when it actually looks `"users"` up in
+`Base.metadata.tables`) -- so as long as `modules.auth.models` has been
+imported *somewhere* in the process before the first real flush (true for
+every real request: `routers.py` mounts both `conversations` and `auth`),
+the FK resolves correctly regardless of which module happened to import
+first. `tests/unit/test_conversations_service.py` (the one place outside
+the app itself that imports this module) never flushes a real `Conversation`
+row at all -- fake repositories, no session -- so it never exercises this
+path either way.
 """
 
 from __future__ import annotations
@@ -22,7 +29,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, DateTime, ForeignKey, String, Table, Text, text
+from sqlalchemy import DateTime, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -34,19 +41,6 @@ from core.db.base import Base
 # same reason the migration hardcodes it: changing the actual column width
 # needs a new migration, not just an `.env` edit (BLUEPRINT.md §3.3).
 EMBEDDING_DIMENSION = 1024
-
-# Core-only (not ORM-mapped) stand-in for the `users` table so
-# `Conversation.user_id`'s FK below has something to resolve against. §8
-# step 7's `User` ORM model should either point `__table__` at this same
-# `Table` object (`Base.metadata.tables["users"]`) or otherwise ensure only
-# one definition of "users" is registered in `Base.metadata` -- two
-# competing `Table("users", ...)` calls without `extend_existing=True`
-# raise on import.
-_users_table = Table(
-    "users",
-    Base.metadata,
-    Column("id", PGUUID(as_uuid=True), primary_key=True),
-)
 
 
 class Conversation(Base):
