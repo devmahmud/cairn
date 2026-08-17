@@ -8,26 +8,24 @@ FastAPI (the CLI eval harness, §3.11). Everything else -- including the
 concern and don't mix `Provide` and `Depends` for the same kind of
 dependency."
 
-What's real today (§8 steps 4-5): `config`, `sessionmaker`, `loader`,
+What's real today (§8 steps 4-6): `config`, `sessionmaker`, `loader`,
 `prompt_engine` (both tiers -- bundled `.j2` files, and the Langfuse-by-
 label overlay when `LANGFUSE_PROMPTS=true`), `db_engine`, `runtime_config`,
 `behavior_config`, `embedding_service`, `retrieval_service`,
-`checkpointer_pool`/`checkpointer`, and `chat_agent`. As the composition
-root, this module is the one sanctioned place that imports "up" from
-`agents/`/`modules/` into what's otherwise `core/`'s own layer (§3.1) --
-wiring the object graph together is the whole point of a composition root.
+`checkpointer_pool`/`checkpointer`, `chat_agent`, `redis_client`,
+`stream_bus`, and `chat_streamer`. As the composition root, this module is
+the one sanctioned place that imports "up" from `agents/`/`modules/` into
+what's otherwise `core/`'s own layer (§3.1) -- wiring the object graph
+together is the whole point of a composition root.
 
-`chat_streamer` is still wired with the right *shape* -- provider type,
-name, dependency edges -- exactly as §8 step 6 needs it, but resolving it
-before that step lands raises `NotImplementedError` immediately (see
-`_not_yet_implemented` below) rather than silently importing a class that
-doesn't exist yet (which would break importing this module at all) or
-returning a half-working object.
+The module also exports a single instantiated `container` (below the class)
+-- `main.py`'s lifespan and `modules/chat/router.py`'s `Depends`-wrapped
+resolver both import *that* instance, not `Container` the class, so they
+share the one set of already-`.open()`ed singletons (the checkpointer pool,
+chiefly) rather than each accidentally building its own.
 """
 
 from __future__ import annotations
-
-from typing import Any, NoReturn
 
 from dependency_injector import containers, providers
 
@@ -40,27 +38,10 @@ from core.prompts.engine import PromptEngine
 from core.prompts.langfuse_client import build_langfuse_prompt_client
 from core.prompts.loader import FileSystemJ2Loader
 from core.runtime_config import RuntimeConfig
+from core.stream.resume import build_redis_client, build_stream_bus
+from modules.chat.chat_stream import ChatStreamer
 from modules.embedding.service import OpenAIEmbeddingService
 from modules.retrieval.factory import build_retrieval_service
-
-
-def _not_yet_implemented(component: str, blueprint_section: str) -> Any:
-    """Build the provider callable for a component a later scaffold step adds.
-
-    Keeps the container's shape matching BLUEPRINT.md §3.4 today without
-    importing classes that don't exist yet. The returned factory is only
-    ever called when something actually resolves this provider (DI
-    providers are lazy) -- inert until then.
-    """
-
-    def _factory(*_args: object, **_kwargs: object) -> NoReturn:
-        raise NotImplementedError(
-            f"{component} is wired into the DI container's shape "
-            f"(BLUEPRINT.md {blueprint_section}) but not implemented until a "
-            "later scaffold step (BLUEPRINT.md §8). See core/di/container.py."
-        )
-
-    return _factory
 
 
 class Container(containers.DeclarativeContainer):
@@ -142,9 +123,23 @@ class Container(containers.DeclarativeContainer):
         behavior_config=behavior_config,
     )
 
-    # --- Not yet implemented -- §8 step 6 builds this -----------------------
+    # Durable streaming's Redis bus (§3.7, §8 step 6). `redis_client` is
+    # `None` whenever `REDIS_URL` is unset -- `build_stream_bus` propagates
+    # that straight through to `stream_bus`, which is what
+    # `ChatStreamer.durable_enabled` checks to fall back to simple-mode
+    # streaming instead of erroring. Neither provider touches the network at
+    # construction time (offline-first, design principle #4): `redis.from_url`
+    # only opens a connection on the first real command.
+    redis_client = providers.Singleton(build_redis_client, settings=config)
+    stream_bus = providers.Singleton(build_stream_bus, redis_client=redis_client)
+
     chat_streamer = providers.Factory(
-        _not_yet_implemented("chat_streamer (ChatStreamer)", "§3.7, §8 step 6"),
+        ChatStreamer,
         chat_agent=chat_agent,
         sessionmaker=sessionmaker,
+        stream_bus=stream_bus,
+        app_settings=config,
     )
+
+
+container = Container()

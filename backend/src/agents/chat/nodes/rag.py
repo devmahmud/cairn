@@ -9,6 +9,16 @@ passages via `config/prompts/docs_assistant/answer.j2`'s numbered-citation
 format, treating every retrieved passage as *context to cite*, never as
 instructions to follow (OWASP LLM01's indirect-injection note, §3.12 --
 retrieved text is untrusted).
+
+**Streaming (§3.6, §3.7):** this is the template's worked example of a
+"structured node" in the streaming-technique sense -- its answer is only
+final once retrieval, abstention, and citation-numbering all land together,
+so it pushes incremental text through LangGraph's custom stream writer
+(`get_stream_writer()`) as it generates, rather than relying on
+`on_chat_model_stream`/`stream_mode="messages"` the way the plain `answer`
+node does. `modules/chat/chat_stream.py`'s translator knows to prefer this
+node's custom-writer chunks over its (also-present, but redundant) raw model
+stream.
 """
 
 from __future__ import annotations
@@ -22,7 +32,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from agents.base import GraphNode
 from agents.chat.nodes._protocols import BehaviorSource
-from agents.chat.nodes._util import content_to_text, today_iso
+from agents.chat.nodes._util import content_to_text, stream_writer_or_noop, today_iso
 from agents.chat.state import ChatState
 from agents.llm import get_llm
 from agents.registry import register
@@ -122,9 +132,19 @@ class RagNode(GraphNode[ChatState]):
                 ],
             )
             llm = self._llm_factory("rag")
-            response = await llm.ainvoke(
+            writer = stream_writer_or_noop()
+            pieces: list[str] = []
+            async for chunk in llm.astream(
                 [SystemMessage(content=system_prompt), HumanMessage(content=answer_prompt)]
-            )
+            ):
+                piece = content_to_text(chunk.content)
+                if piece:
+                    pieces.append(piece)
+                    writer({"node": self.name, "text": piece})
+            text = "".join(pieces)
+            if not text:
+                raise ValueError("rag: LLM stream produced no content")
+            response: AIMessage = AIMessage(content=text)
         except Exception:
             logger.warning("rag.generation_failed", exc_info=True)
             return {
@@ -136,7 +156,6 @@ class RagNode(GraphNode[ChatState]):
                 "error": "rag_generation_failed",
             }
 
-        text = content_to_text(response.content)
         citations = [
             {
                 "index": index,

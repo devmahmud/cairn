@@ -25,8 +25,8 @@ This is also the DI container's `chat_agent` provider target
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from typing import cast
+from collections.abc import AsyncIterator, Callable
+from typing import Any, cast
 from uuid import UUID
 
 import structlog
@@ -124,3 +124,69 @@ class ChatAgent:
             }
 
         return cast(ChatState, result)
+
+    async def astream(
+        self, *, conversation_id: UUID | str, user_id: UUID | str | None, text: str
+    ) -> AsyncIterator[tuple[str, Any]]:
+        """Run one turn, yielding `(stream_mode, payload)` as the graph produces it.
+
+        The streaming counterpart to `ainvoke` -- same `thread_id`/input-state
+        setup and the same `TURN_BUDGET_SECONDS` wall-clock budget (§3.6), but
+        yields incrementally instead of returning only the final state, for
+        `modules/chat/chat_stream.py`'s translator to turn into SSE events.
+        `stream_mode=["updates", "messages", "custom"]` (§3.6, §3.7) is the
+        one place this template calls `graph.astream` with all three modes
+        multiplexed:
+        - `"updates"` -- each node's partial state update as it completes
+          (drives `agent_switch`/`decision`/`guardrail`/`message_end`).
+        - `"messages"` -- token-by-token model output, auto-streamed by
+          LangGraph for any node's plain (non-tool-bound, non-structured-
+          output) LLM call, even one made via a plain `.ainvoke()` -- the
+          "plain-text node" half of §3.6's streaming-technique correction.
+        - `"custom"` -- whatever a node explicitly pushes via
+          `get_stream_writer()` (`agents/chat/nodes/rag.py`'s answer
+          generation, `tool.py`'s per-call results) -- the "structured/
+          forced-tool node" half, since `"messages"` only carries tool-call
+          chunks for those.
+
+        A turn-budget timeout yields one final `("timeout", {...})` tuple --
+        not a plain state dict shaped like `ainvoke`'s return, since a
+        streaming caller has no single "the result" to hand back; the
+        translator treats this sentinel mode as a mid-turn `error` event
+        (§3.7: "the HTTP error path is gone once bytes flow").
+        """
+        thread_id = str(conversation_id)
+        input_state: ChatState = {
+            "messages": [HumanMessage(content=text)],
+            "conversation_id": thread_id,
+            "user_id": str(user_id) if user_id is not None else None,
+            "input": text,
+            "hops": 0,
+            "abstained": False,
+            "error": None,
+        }
+        config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+
+        try:
+            async with asyncio.timeout(self._settings.TURN_BUDGET_SECONDS):
+                async for mode, payload in self._graph.astream(
+                    input_state,
+                    config=config,
+                    stream_mode=["updates", "messages", "custom"],
+                    durability=self._durability,
+                ):
+                    yield mode, payload
+        except TimeoutError:
+            logger.warning(
+                "chat_agent.turn_budget_exceeded",
+                thread_id=thread_id,
+                turn_budget_seconds=self._settings.TURN_BUDGET_SECONDS,
+            )
+            yield (
+                "timeout",
+                {
+                    "answer": _TURN_BUDGET_MESSAGE,
+                    "citations": [],
+                    "error": "turn_budget_exceeded",
+                },
+            )

@@ -19,21 +19,22 @@ from starlette.middleware.cors import CORSMiddleware
 
 from core.config import settings
 from core.db.engine import engine
-from core.di.container import Container
+from core.di.container import container
 from core.errors.handlers import register_exception_handlers
 from core.middleware.request_id import RequestIDMiddleware
 from core.observability.logging import configure_logging
 from core.prompts.watcher import watch_and_reload
+from modules.chat.sse import register_sse_schema
 from routers import api_router
 
 configure_logging(json_logs=settings.ENVIRONMENT != "local")
 logger = structlog.get_logger(__name__)
 
-# The composition root (§3.4). Instantiating it here only builds the
-# `Container` object itself -- `dependency-injector` providers are lazy, so
-# none of the `_not_yet_implemented` singletons (§8 steps 5-6) are touched
-# until something actually resolves them.
-container = Container()
+# The composition root's one shared instance (§3.4, `core/di/container.py`)
+# -- `dependency-injector` providers are lazy, so importing it here doesn't
+# touch the network by itself; `modules/chat/router.py` imports this same
+# object (not a second `Container()`) so both see the one checkpointer pool
+# this lifespan actually opens below.
 
 
 @asynccontextmanager
@@ -75,6 +76,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await checkpointer_pool.close()
     await engine.dispose()
+    # `None` whenever `REDIS_URL` is unset (§3.7, `core/stream/resume.py`) --
+    # nothing to close in the offline-first default case.
+    redis_client = container.redis_client()
+    if redis_client is not None:
+        await redis_client.aclose()
     logger.info("app.shutdown")
 
 
@@ -114,3 +120,9 @@ register_exception_handlers(app)
 Instrumentator().instrument(app).expose(app, include_in_schema=False)
 
 app.include_router(api_router)
+
+# Merges `ChatSSEEvent`'s discriminated union into `/openapi.json` -- SSE
+# responses bypass `response_model`, so nothing about it would otherwise
+# reach the schema `openapi-typescript` (§4.3) generates the frontend's SSE
+# dispatch types from.
+register_sse_schema(app)

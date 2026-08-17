@@ -21,6 +21,16 @@ call args instead -- don't rely on "the checkpointer already ran this node"
 as the dedup mechanism, because the crash window above is exactly the case
 where it hasn't (see this node's own bounded loop below for where that key
 would be threaded through).
+
+**Streaming (§3.6, §3.7):** the LLM turns that decide *whether* to call a
+tool are forced-tool-bound (`bind_tools`) -- their `on_chat_model_stream`
+chunks carry only tool-call argument deltas, not user-facing text, so this
+node doesn't try to stream those. It does push one `tool_result` event per
+completed call via `get_stream_writer()` so the client can show "ran
+`web_search`" as it happens rather than only after the whole bounded loop
+finishes; the loop's *final* plain-text turn (no more tool calls) still
+auto-streams through `stream_mode="messages"` like `answer.py`'s does, since
+by then the model isn't emitting tool-call chunks.
 """
 
 from __future__ import annotations
@@ -35,7 +45,7 @@ from langchain_core.messages.tool import ToolCall
 from langchain_core.tools import BaseTool, tool
 
 from agents.base import GraphNode
-from agents.chat.nodes._util import content_to_text, today_iso
+from agents.chat.nodes._util import content_to_text, stream_writer_or_noop, today_iso
 from agents.chat.state import ChatState
 from agents.llm import get_llm
 from agents.registry import register
@@ -98,6 +108,7 @@ class ToolAgentNode(GraphNode[ChatState]):
             HumanMessage(content=question),
         ]
         bound_llm = self._llm_factory("tool").bind_tools(self._tools)
+        writer = stream_writer_or_noop()
 
         hops = 0
         try:
@@ -117,7 +128,7 @@ class ToolAgentNode(GraphNode[ChatState]):
                     return _graceful_result(hops, error="tool_hop_cap_exceeded")
 
                 for call in response.tool_calls:
-                    messages.append(await self._invoke_one(call))
+                    messages.append(await self._invoke_one(call, writer))
         except Exception:
             # Fallback ladder (§3.6: "tool-error -> graceful message") --
             # catches failures outside a single tool call (the LLM call
@@ -127,11 +138,24 @@ class ToolAgentNode(GraphNode[ChatState]):
             logger.warning("tool.failed_falling_back_to_graceful_message", exc_info=True)
             return _graceful_result(hops, error="tool_error")
 
-    async def _invoke_one(self, call: ToolCall) -> BaseMessage:
+    async def _invoke_one(
+        self, call: ToolCall, writer: Callable[[dict[str, Any]], None]
+    ) -> BaseMessage:
         name = call["name"]
         matched_tool = self._tools_by_name.get(name)
         if matched_tool is None:
-            return ToolMessage(content=f"Unknown tool {name!r}.", tool_call_id=call["id"])
+            message: BaseMessage = ToolMessage(
+                content=f"Unknown tool {name!r}.", tool_call_id=call["id"]
+            )
+            writer(
+                {
+                    "node": self.name,
+                    "type": "tool_result",
+                    "tool_name": name,
+                    "result": message.content,
+                }
+            )
+            return message
         try:
             # Passing the full `ToolCall` (not just `call["args"]`) makes
             # `BaseTool.ainvoke` return a ready-made `ToolMessage` stamped
@@ -141,8 +165,27 @@ class ToolAgentNode(GraphNode[ChatState]):
             result = await matched_tool.ainvoke(call)
         except Exception as exc:
             logger.warning("tool.tool_call_failed", tool_name=name, exc_info=True)
-            return ToolMessage(content=f"Tool {name!r} failed: {exc}", tool_call_id=call["id"])
-        return result if isinstance(result, BaseMessage) else _wrap_result(result, call)
+            message = ToolMessage(content=f"Tool {name!r} failed: {exc}", tool_call_id=call["id"])
+            writer(
+                {
+                    "node": self.name,
+                    "type": "tool_result",
+                    "tool_name": name,
+                    "result": message.content,
+                }
+            )
+            return message
+
+        message = result if isinstance(result, BaseMessage) else _wrap_result(result, call)
+        writer(
+            {
+                "node": self.name,
+                "type": "tool_result",
+                "tool_name": name,
+                "result": content_to_text(message.content),
+            }
+        )
+        return message
 
 
 def _wrap_result(result: Any, call: ToolCall) -> BaseMessage:
