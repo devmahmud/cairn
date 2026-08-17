@@ -1,0 +1,12 @@
+# Pinned toolchain for Cairn (BLUEPRINT.md §1, §5).
+# https://mise.jdx.dev — `mise install` picks these up automatically on `cd` into the repo.
+
+[tools]
+python = "3.13"
+node = "24"
+uv = "0.9"
+pnpm = "10"
+
+[env]
+# Keeps `uv`/`pytest`/etc. targeting the backend's own venv regardless of cwd within the repo.
+UV_PROJECT_ENVIRONMENT = "backend/.venv"

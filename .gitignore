@@ -31,3 +31,17 @@ frontend/build/
 # --- Docker / data ---
 *.log
 .docker-data/
+
+# --- Test / coverage artifacts ---
+.coverage
+htmlcov/
+coverage.xml
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+
+# --- Copier (client forks only — not this template repo itself) ---
+.copier-answers.yml
+
+# --- OS junk ---
+Thumbs.db

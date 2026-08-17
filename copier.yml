@@ -1,0 +1,87 @@
+# Cairn Copier template config (BLUEPRINT.md §3.14).
+#
+# `copier copy gh:<org>/cairn my-client` scaffolds a new client fork and writes
+# `.copier-answers.yml` into it, which is what lets `copier update` 3-way-merge
+# later upstream fixes into an already-customized fork instead of a one-shot,
+# update-less clone. A client fork should only ever diverge on the answers
+# below (which flow into client.config.yaml + examples/<active_example_pack>/)
+# — never hand-edit core/.
+
+_min_copier_version: "9.0.0"
+_subdirectory: "."
+_envops:
+  autoescape: false
+  keep_trailing_newline: true
+
+# Excluded from the generated copy — template-authoring files a client fork
+# doesn't need, plus the usual build/dependency junk.
+_exclude:
+  - "copier.yml"
+  - ".git"
+  - "__pycache__"
+  - "*.pyc"
+  - ".venv"
+  - "node_modules"
+
+_tasks:
+  - "echo 'Cairn client scaffold generated.'"
+  - "echo 'Next: review client.config.yaml, fill in .env, then see NEW_CLIENT_CHECKLIST.md.'"
+
+project_name:
+  type: str
+  help: "Machine-friendly project slug — used for the repo dir, Docker image tags, and compose project name."
+  default: "cairn-client"
+
+client_display_name:
+  type: str
+  help: "Human-readable client/product name — shown in the frontend UI, README, and client.config.yaml."
+  default: "Cairn"
+
+client_slug:
+  type: str
+  help: "Short slug identifying this client fork (client.config.yaml, log/trace tagging)."
+  default: "{{ project_name }}"
+
+active_example_pack:
+  type: str
+  help: >-
+    Which examples/<pack> domain pack to activate for this client (BLUEPRINT.md §2's
+    examples/ note). "docs-assistant" is the neutral pack the core template ships with;
+    "petcare" is the fuller-featured pack (slots/entities/routing) this template was
+    distilled from — pick it as a worked example of a domain-shaped pack. "none" starts
+    from the bare neutral core.
+  default: petcare
+  choices:
+    - petcare
+    - docs-assistant
+    - none
+
+database_name:
+  type: str
+  help: "Postgres database name for this client's deployment (DATABASE_URL, docker-compose.yml)."
+  default: app
+
+openai_model:
+  type: str
+  help: "Default chat-completion model, via OPENAI_BASE_URL / LiteLLM (OPENAI_MODEL)."
+  default: gpt-4o-mini
+
+use_auth:
+  type: bool
+  help: "Enable JWT auth by default for this client? (AUTH_ENABLED)"
+  default: false
+
+use_guardrails:
+  type: bool
+  help: "Enable the guardrail rail stack by default? (GUARDRAILS_ENABLED — Presidio + NeMo Guardrails + Granite Guardian)"
+  default: false
+
+use_langfuse:
+  type: bool
+  help: "Enable Langfuse tracing + prompt management by default? (LANGFUSE_ENABLED)"
+  default: false
+
+docker_registry:
+  type: str
+  help: "Container registry namespace images are pushed to, e.g. ghcr.io/your-org."
+  default: "ghcr.io/your-org"

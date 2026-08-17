@@ -1,0 +1,56 @@
+# Cairn client-customization manifest (BLUEPRINT.md §3.14).
+#
+# This is the ONE file (+ examples/<active_pack>/) a client fork should ever
+# diverge on — never hand-edit core/. Keeping divergence here is what keeps
+# `copier update` 3-way-merges low-conflict when upstream fixes land.
+#
+# Populated below with this template's own reference-implementation defaults:
+# the neutral core example (docs-assistant), local/offline-first retrieval,
+# and every optional subsystem off.
+
+client:
+  display_name: "Cairn"
+  slug: cairn
+  description: "Reference deployment of the Cairn agent-chat template."
+
+branding:
+  theme:
+    primary_color: "#2563eb"
+    accent_color: "#0ea5e9"
+    logo_path: frontend/src/shared/assets/logo.svg
+    favicon_path: frontend/public/favicon.svg
+
+examples:
+  # Which backend/src/examples/<pack> domain pack is active. "docs-assistant"
+  # is the neutral pack the core template ships with (§2, §3.3 changelog);
+  # "petcare" is the fuller-featured worked example (slots/entities/routing)
+  # this template was distilled from. "none" runs the bare neutral core.
+  active_pack: docs-assistant
+
+llm:
+  provider: openai            # openai-compatible client; base_url below is the actual swap-point
+  model: gpt-4o-mini
+  base_url: ""                # "" = OpenAI's own API; point at LiteLLM/Ollama/vLLM to swap providers
+  rate_limits:
+    per_min: 0                # 0 = off (see RATE_LIMIT_PER_MIN)
+    concurrency: 4            # in-flight generation cap (asyncio.Semaphore)
+
+retrieval:
+  corpus_source: backend/data/sample_corpus
+  use_local_fixture: true     # true = zero-dep fixture retrieval; matches USE_LOCAL_RETRIEVAL default
+  embedding_model: Qwen3-Embedding-0.6B
+  embedding_dimension: 1024
+  rerank_enabled: true
+
+feature_flags:
+  guardrails_enabled: false
+  auth_enabled: false
+  stream_durable: false
+  langfuse_enabled: false
+  mcp_enabled: false
+  session_sweeper_enabled: false
+
+deployment:
+  database_name: app
+  environment: local
+  docker_registry: "ghcr.io/your-org"
