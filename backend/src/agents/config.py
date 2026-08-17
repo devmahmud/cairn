@@ -42,11 +42,16 @@ class RoleConfig:
 # - `tool` -- deterministic tool-selection, a mid-length timeout that also
 #   has to cover the bound tools' own execution time within the same node
 #   (`agents/chat/nodes/tool.py`'s bounded loop).
+# - `judge` -- not a graph node role at all, but the same "different
+#   temperature/timeout for a different job" reasoning applies: the LLM-
+#   judged scenario eval (`tests/eval/judge.py`, §3.11, §8 step 10) wants a
+#   deterministic scorer, same as `classify`.
 _ROLE_CONFIGS: dict[str, RoleConfig] = {
     "classify": RoleConfig(model=settings.OPENAI_MODEL, temperature=0.0, timeout=8.0),
     "answer": RoleConfig(model=settings.OPENAI_MODEL, temperature=0.3, timeout=30.0),
     "rag": RoleConfig(model=settings.OPENAI_MODEL, temperature=0.2, timeout=30.0),
     "tool": RoleConfig(model=settings.OPENAI_MODEL, temperature=0.0, timeout=20.0),
+    "judge": RoleConfig(model=settings.OPENAI_MODEL, temperature=0.0, timeout=30.0),
 }
 
 

@@ -9,7 +9,7 @@
 
 COMPOSE ?= docker compose
 
-.PHONY: help setup run test up down migrate seed ingest contract contract-check up-langfuse up-litellm
+.PHONY: help setup run test eval up down migrate seed ingest contract contract-check up-langfuse up-litellm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -25,6 +25,9 @@ run: ## Run backend (fastapi dev) + frontend (vite dev) — needs `make up` for 
 test: ## Run backend (pytest) + frontend (vitest) test suites
 	cd backend && uv run pytest
 	cd frontend && pnpm test
+
+eval: ## Run the cost-incurring LLM-judged scenario + routing eval (needs real OPENAI_API_KEY/OPENAI_BASE_URL; not run in CI)
+	cd backend && uv run pytest tests/eval -m eval -v
 
 up: ## Start the lean local stack (postgres+pgvector, redis, backend, frontend)
 	$(COMPOSE) up -d
