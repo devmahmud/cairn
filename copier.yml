@@ -46,13 +46,11 @@ active_example_pack:
   type: str
   help: >-
     Which examples/<pack> domain pack to activate for this client (BLUEPRINT.md §2's
-    examples/ note). "docs-assistant" is the neutral pack the core template ships with;
-    "petcare" is the fuller-featured pack (slots/entities/routing) this template was
-    distilled from — pick it as a worked example of a domain-shaped pack. "none" starts
-    from the bare neutral core.
-  default: petcare
+    examples/ note). "docs-assistant" is the neutral worked example the core template
+    ships with. "none" starts from the bare neutral core — add your own pack under
+    examples/<your-domain>/ following the same strippable-pack pattern.
+  default: docs-assistant
   choices:
-    - petcare
     - docs-assistant
     - none
 
@@ -68,8 +66,8 @@ openai_model:
 
 use_auth:
   type: bool
-  help: "Enable JWT auth by default for this client? (AUTH_ENABLED)"
-  default: false
+  help: "Enable auth by default for this client? (AUTH_ENABLED) — conversations are per-user, so this is on by default; only turn off for eval/CI runs that don't need identity."
+  default: true
 
 use_guardrails:
   type: bool

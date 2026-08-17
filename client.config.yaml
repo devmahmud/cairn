@@ -22,9 +22,9 @@ branding:
 
 examples:
   # Which backend/src/examples/<pack> domain pack is active. "docs-assistant"
-  # is the neutral pack the core template ships with (§2, §3.3 changelog);
-  # "petcare" is the fuller-featured worked example (slots/entities/routing)
-  # this template was distilled from. "none" runs the bare neutral core.
+  # is the neutral worked example the core template ships with (§2, §3.3).
+  # "none" runs the bare neutral core — add your own pack under
+  # examples/<your-domain>/ following the same strippable-pack pattern.
   active_pack: docs-assistant
 
 llm:
@@ -44,7 +44,7 @@ retrieval:
 
 feature_flags:
   guardrails_enabled: false
-  auth_enabled: false
+  auth_enabled: true   # conversations are per-user by default; see BLUEPRINT.md §3.9
   stream_durable: false
   langfuse_enabled: false
   mcp_enabled: false

@@ -3,10 +3,10 @@
 *A durable, checkpointed foundation for building agent chat apps — the marker that always knows the way back.*
 
 A reusable, **open-source, self-hostable** template for building streaming LLM/agent chat
-applications. Distilled from the *AE Lite* (Purina Care Companion) architecture, with every
-Azure-specific and remote-config dependency removed — then hardened against a 6-lens adversarial
-review (orchestration, RAG/data, backend, streaming/FE, prod/security/cost, reference-architecture),
-and a v3 staleness/licensing/multi-client refresh (9-agent research audit, Aug 2026).
+applications, designed with no Azure-specific or remote-config dependency from the outset — hardened
+against a 6-lens adversarial review (orchestration, RAG/data, backend, streaming/FE, prod/security/cost,
+reference-architecture), and a v3 staleness/licensing/multi-client refresh (9-agent research audit,
+Aug 2026).
 
 > **Status:** Blueprint, v3 (validated). The runnable scaffold is generated from this document.
 > This file is the durable reference you copy into future projects.
@@ -88,8 +88,9 @@ mis-architected layers. v2 changes:
 - **Runtime control without remote config** → your **no-cloud-config** rule is kept, but a *local*
   control plane is added: **Langfuse prompt management** (already in stack) + a **DB config-override
   table** + **`watchfiles` hot reload** (§3.2, §3.5).
-- **Generic core re-derived** → pet-care ontology (slots, entities, need-states) removed from the core;
-  the shipped example is a neutral **docs-assistant**; domain packs live under `examples/` (§2, §3.3).
+- **Generic core.** The core schema is domain-neutral (`users/conversations/messages/documents`); the
+  shipped example is a neutral **docs-assistant**; any domain-specific logic (slots, entities, routing
+  tables) lives under `examples/` as a strippable pack (§2, §3.3).
 - **Streaming technique corrected** → structured/forced-tool nodes stream via a **custom writer**, not
   `on_chat_model_stream` (which carries only tool-call chunks) (§3.6, §3.7).
 - **Smaller fixes** → drop the generic filter DSL for explicit `select()`; `visibilitychange` fix for
@@ -158,7 +159,7 @@ mis-architected layers. v2 changes:
 | Guardrails | **Presidio** (PII, MIT, independently-governed) + **NeMo Guardrails** (Apache-2.0, orchestration) + **Granite Guardian** (Apache-2.0, guard model) | off by default, no-op; Llama Guard is opt-in only — its license is not OSI-approved (§3.12) |
 | Cache / resume / rate-limit | **Redis 7** | resumable streams, `slowapi`, cache |
 | Observability | **Langfuse** + **structlog** + **`prometheus-fastapi-instrumentator`** | traces + logs + metrics; Langfuse core is MIT self-hosted, EE tier (SCIM/audit-log) is paid |
-| Auth | **PyJWT + bcrypt** (or **`fastapi-users`**, MIT, feature-frozen since v15.0.1) | wired, optional, ownership-checked |
+| Auth | **`fastapi-users`** (MIT, feature-frozen since v15.0.1 — stable, security-patched) | on by default; conversations are owned per-user, not optional (§3.9) |
 | Tooling (BE) | **uv · ruff · mypy · pytest · pre-commit · mise** | |
 | Frontend | **Vite 8 + React 19 + TS** SPA · Zustand · Tailwind v4 + shadcn(`@base-ui/react`, now shadcn's default substrate) | |
 | Contract sync | **`openapi-typescript`** off FastAPI's OpenAPI | full REST client + SSE types; `@hey-api/openapi-ts` if generated SDK methods/hooks (not just types) are wanted |
@@ -166,12 +167,15 @@ mis-architected layers. v2 changes:
 | Containers / registry / CI | Docker + compose · **ghcr.io** · GitHub Actions | |
 | Client scaffolding | **Copier** (MIT) | generates each client fork; `copier update` 3-way-merges upstream template fixes into an already-customized fork (§3.14) |
 
-### Azure → OSS replacement (unchanged from v1, summarized)
+### No managed-cloud dependency, by design
 
-Cosmos → **Postgres/SQLAlchemy**; AI Search → **pgvector (hybrid+rerank)**; Blob → **local files**;
-App Configuration → **deleted** (local control plane instead); Identity/Key Vault → `.env` + optional
-SOPS+age; Container Apps/ACR → **compose/ghcr.io**; Azure OpenAI → already-OpenAI-compatible `get_llm`;
-Langfuse/Redis/structlog → **kept (already OSS)**.
+Every stateful concern is self-hosted and OSS: **Postgres/SQLAlchemy** for rows (no managed
+document/NoSQL service); **pgvector hybrid+rerank** for search (no managed search service); **local
+files** for blobs; a **local control plane** — `.env` + a DB override table + `watchfiles` — instead of a
+cloud config service; **`.env` + optional SOPS+age** for secrets (no cloud key-vault dependency);
+**compose/ghcr.io** for build+deploy (no proprietary container platform); `get_llm()` is
+OpenAI-API-compatible so any provider — hosted or self-hosted — is a `OPENAI_BASE_URL` swap, never a
+hard dependency on one vendor's model API.
 
 ---
 
@@ -218,7 +222,7 @@ cairn/
 │   │   ├── agents/               # LangGraph; emits NO SSE; checkpointed
 │   │   │   ├── llm.py  config.py  base.py  registry.py
 │   │   │   └── chat/{agent,graph,state,schemas}.py  nodes/
-│   │   └── examples/             # ← strippable domain packs (e.g. petcare/: slots, entities, routing)
+│   │   └── examples/             # ← strippable domain packs; ships one neutral worked example (docs-assistant/)
 │   └── tests/                    # unit / integration / eval (+ retrieval & injection evals)
 │
 └── frontend/
@@ -268,7 +272,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MIN: int = 0          # 0 → off
     MAX_GRAPH_HOPS: int = 6
     TURN_BUDGET_SECONDS: float = 90.0
-    AUTH_ENABLED: bool = False
+    AUTH_ENABLED: bool = True    # conversations are per-user by default; set False only for eval/CI runs that don't need identity
     JWT_SECRET: str = "change-me"
     LANGFUSE_ENABLED: bool = False
     LANGFUSE_PROMPTS: bool = False       # true → fetch prompts by label, fallback to bundled files
@@ -283,7 +287,7 @@ class Settings(BaseSettings):
 
 ### 3.3 Persistence — PostgreSQL + pgvector, with real transactions
 
-**Neutral core schema** (pet-care ontology removed; domain packs add their own tables under `examples/`):
+**Neutral core schema** (any domain-specific tables live under `examples/`, not here):
 
 | Table | Holds |
 |---|---|
@@ -439,7 +443,7 @@ rather than an assumption:
   via the checkpointer), not just terminate.
 - **input_rail / output_rail** — guardrail hooks (§3.12), no-op unless `GUARDRAILS_ENABLED`.
 
-**Resilience (port + extend what AE Lite had):** per-node timeouts, a fallback ladder (classify
+**Resilience:** per-node timeouts, a fallback ladder (classify
 timeout→`unclear`, RAG-empty→defer, tool-error→graceful message), LangGraph `RetryPolicy` on LLM/tool
 nodes, `max_retries` on the client, and a **per-turn wall-clock budget** wrapping the whole graph.
 
@@ -530,9 +534,15 @@ vectors) or graduate to **Qdrant** — both behind the unchanged Protocol.
   `BaseHTTPMiddleware`.
 - **Request-id** → a tiny **pure-ASGI** middleware (`x-request-id`); access logging via structlog —
   **not** a body-buffering route class (v1's `LoggingApiRoute` re-read bodies and broke on streams).
-- **Auth (optional, wired)** → `JWTBearer` + **ownership checks** on `user_id`. For production, prefer
-  **`fastapi-users`** (refresh rotation, revocation, reset, OAuth); the hand-rolled path is labeled
-  "demo — replace before prod."
+- **Auth — on by default, not a demo.** Persisting conversation history per real user is core
+  functionality, not an add-on: a returning, authenticated user must see their own conversations and
+  no one else's. Default implementation is **`fastapi-users`** (MIT, refresh rotation, revocation,
+  password reset, OAuth) wired against the `users` table from §3.3, with `JWTBearer` + **ownership
+  checks** enforced on every `conversations`/`messages` query (`user_id` scoping at the repository
+  layer, not just the router). `AUTH_ENABLED=true` by default — this needs no external credential
+  (the JWT secret is local), so it doesn't break offline-first boot; it just means the first API call
+  is register/login, same as any real chat product. `AUTH_ENABLED=false` remains available for eval/CI
+  runs that don't need identity, but is not the reference default.
 - **CORS** → explicit `CORS_ALLOW_ORIGINS` list; never `*` with credentials.
 - **Observability** → Langfuse (traces/cost, no-op when off) + structlog (JSON, with a
   `censor_sensitive_data` processor — *logs only*) + **Prometheus `/metrics`**
@@ -686,8 +696,7 @@ src/
 
 ### 4.2 The SSE pipeline (extracted & de-coupled — **not** "ported verbatim")
 
-The AE Lite hook is *not* drop-in (it carries `next-intl`, persona/product coupling, Purina session-id
-logic). v2 ships a **generic** hook: framework-agnostic parser + dispatch, no domain code, server-issued
+This hook is a **generic**, framework-agnostic parser + dispatch: no domain coupling baked in, server-issued
 ids. i18n is optional (`react-i18next`).
 
 - **Layer 1 — fetch** → `ReadableStream` (POST, `Accept: text/event-stream`).
@@ -753,22 +762,20 @@ Observability / Frontend) — every knob documented, safe defaults.
 
 ---
 
-## 7. What changed vs AE Lite
+## 7. Core architectural commitments
 
-**Kept:** layered core/modules/agents; DI composition root (scoped to singletons); vertical slices;
-provider-agnostic `get_llm`; deterministic-router LangGraph; contract-first SSE + streamer separation;
-offline-first Protocol+factory; prompts/behavior as config; Langfuse + structlog; the FE SSE pipeline,
-typewriter, feature-sliced stores.
+The load-bearing decisions that every later revision (v1→v2→v3) has preserved: layered
+`core/modules/agents`; a DI composition root (scoped to singletons); vertical slices; provider-agnostic
+`get_llm`; a deterministic-router LangGraph; contract-first SSE with the streamer kept separate from the
+graph; offline-first Protocol+factory pattern; prompts/behavior as config; Langfuse + structlog; the FE
+SSE pipeline, typewriter, and feature-sliced stores.
 
-**Replaced/Deleted:** Cosmos→Postgres; AI Search→pgvector(hybrid+rerank); Blob→local files; **App Config
-+ sentinel + reloader deleted**; `azure-*`/Identity gone; ACR/Container Apps→ghcr.io/compose; Next.js→Vite.
-
-**Fixed beyond v1 (validation-driven):** transactions; checkpointer-based durable state/resume/HITL;
-real RAG (index/hybrid/rerank/ingestion/abstention); resumable streams; security rails; cost controls;
-envelope + `BaseHTTPMiddleware` removed; local runtime-control plane; neutral core; corrected streaming
-technique; sweeper leader-election; pagination/idempotency/readiness/metrics. Several of these were
-**inherited uncritically from AE Lite** — v2 applies the same scrutiny to them that v1 applied to the
-Azure config machinery.
+**Fixed by the v2 validation pass (see changelog above):** transactions; checkpointer-based durable
+state/resume/HITL; real RAG (index/hybrid/rerank/ingestion/abstention); resumable streams; security
+rails; cost controls; the response-envelope/`BaseHTTPMiddleware` removed; a local runtime-control plane;
+a neutral core; corrected streaming technique; sweeper leader-election; pagination/idempotency/readiness/
+metrics. Several of these were carried uncritically from the v1 draft — v2 applied the same scrutiny to
+them that v1 applied to eliminating the cloud-config dependency in the first place.
 
 ---
 

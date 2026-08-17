@@ -1,0 +1,46 @@
+[project]
+name = "cairn-backend"
+version = "0.1.0"
+description = "Cairn backend — FastAPI + LangGraph agent-chat service (BLUEPRINT.md)."
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.19.1",
+    "asyncpg>=0.31.0",
+    "bcrypt>=5.0.0",
+    "dependency-injector>=4.49.1",
+    "fastapi[standard]>=0.141.1",
+    "langchain-openai>=1.5.1",
+    "langgraph>=1.2.11",
+    "langgraph-checkpoint-postgres>=3.1.2",
+    "pgvector>=0.5.0",
+    "prometheus-fastapi-instrumentator>=8.1.0",
+    "pydantic-settings>=2.15.0",
+    "pyjwt>=2.13.0",
+    "redis>=8.1.0",
+    "slowapi>=0.1.10",
+    "sqlalchemy[asyncio]>=2.0.52",
+    "structlog>=26.1.0",
+    "watchfiles>=1.2.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.3",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+markers = [
+    "eval: LLM-judged evaluation scenarios (cost-incurring, skipped by default; see BLUEPRINT.md §3.11)",
+    "integration: needs a real Postgres/Redis via docker-compose (BLUEPRINT.md §3.11)",
+]
+addopts = "-m 'not eval'"
+testpaths = ["tests"]

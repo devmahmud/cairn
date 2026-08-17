@@ -1,0 +1,39 @@
+# Cairn backend — ruff config (BLUEPRINT.md §1, §8 step 2).
+# `src/` is the import root (no top-level `src/__init__.py` — see main.py's
+# `--app-dir`/`fastapi dev` resolution), so first-party imports look like
+# `core.config`, not `src.core.config`.
+
+target-version = "py313"
+line-length = 100
+src = ["src"]
+extend-exclude = ["alembic/versions"]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+    "ASYNC", # flake8-async (blocking calls in async defs)
+    "PIE", # flake8-pie
+    "T20", # flake8-print (no stray print() in a service)
+]
+ignore = [
+    "E501", # line length is enforced by the formatter, not the linter
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["T20"]
+"alembic/env.py" = ["T20"]
+
+[lint.isort]
+known-first-party = ["core", "modules", "agents", "examples"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
