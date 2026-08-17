@@ -48,6 +48,17 @@ class RuntimeConfig:
         value = await self.get(key, default)
         return bool(value)
 
+    async def get_all(self) -> dict[str, Any]:
+        """Return a snapshot of every currently-cached override.
+
+        Used by callers that need to filter by key *prefix* (e.g.
+        `core/behavior/loader.py` pulling every `behavior.<name>.*` row to
+        overlay onto a hot-reloaded YAML file, §3.2/§3.5) rather than one
+        known key at a time.
+        """
+        await self._ensure_fresh()
+        return dict(self._cache)
+
     async def refresh(self) -> None:
         """Force an immediate reload, bypassing the TTL."""
         async with self._engine.connect() as conn:

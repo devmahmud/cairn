@@ -1,0 +1,23 @@
+{% if chunks %}
+Answer the question below using only the numbered context passages. Cite the
+passage number(s) you relied on as [n] immediately after each claim they
+support.
+
+Question: {{ question }}
+
+Context:
+{% for chunk in chunks %}
+[{{ loop.index }}] (source: {{ chunk.source }}, relevance: {{ "%.2f"|format(chunk.score) }})
+{{ chunk.content }}
+
+{% endfor %}
+Write the answer now. If the passages don't fully answer the question, say
+plainly what's missing instead of filling the gap from general knowledge.
+{% else %}
+Question: {{ question }}
+
+No documentation passages were retrieved for this question. Do not answer
+from general knowledge -- tell the user this isn't covered in the docs you
+have access to, and suggest they rephrase or point you at the relevant
+guide.
+{% endif %}

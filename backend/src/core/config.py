@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     LANGFUSE_ENABLED: bool = False
     LANGFUSE_PROMPTS: bool = False
     SESSION_SWEEPER_ENABLED: bool = False
+    # Not part of the §3.2 snippet's core list either, but needed as soon as
+    # `LANGFUSE_PROMPTS=true` asks `core/prompts/engine.py` to actually reach
+    # a self-hosted Langfuse instance (§3.5) -- already documented in
+    # `.env.example`'s Observability section, just missing from `Settings`
+    # until this step wired the client that reads them.
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_HOST: str = "http://localhost:3000"
+    LANGFUSE_PROMPT_LABEL: str = "production"
     MCP_ENABLED: bool = False
 
     # Not part of the §3.2 snippet's core list, but needed immediately by

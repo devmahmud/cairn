@@ -1,0 +1,40 @@
+# Deterministic routing table for the docs-assistant example (BLUEPRINT.md
+# §3.6: "route -- deterministic Python over routing.yaml"). The `classify`
+# graph node emits `{intent, confidence}`; the `route` node (agents/chat/
+# nodes/, a later scaffold step) looks up `intent` here and dispatches to
+# the matching graph branch. Below `confidence_threshold`, or on no
+# matching `intent`, it falls through to `default_route`.
+#
+# Hot-reloaded (§3.2 tier 3, `core/behavior/loader.py`) and overridable
+# cluster-wide via the `config_overrides` table (§3.2 tier 2) with keys of
+# the form `behavior.routing.<dotted.path>` -- e.g. an `UPDATE` setting
+# `behavior.routing.confidence_threshold` to `0.8` raises the abstention bar
+# without editing this file or redeploying.
+
+version: 1
+default_route: rag
+confidence_threshold: 0.55
+
+intents:
+  - name: product_question
+    description: >
+      A question about how the product works, its APIs, configuration, or
+      troubleshooting -- anything answerable from the docs corpus.
+    route: rag
+
+  - name: greeting
+    description: A greeting or small talk with no information need.
+    route: answer
+
+  - name: web_search
+    description: >
+      A question that needs current information outside the bundled docs
+      corpus (pricing that changes often, third-party integrations,
+      "what's the latest version").
+    route: tool
+
+  - name: unclear
+    description: >
+      Classifier confidence fell below `confidence_threshold`, or the
+      intent doesn't fit any of the above.
+    route: guardrail

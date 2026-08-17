@@ -8,15 +8,17 @@ FastAPI (the CLI eval harness, §3.11). Everything else -- including the
 concern and don't mix `Provide` and `Depends` for the same kind of
 dependency."
 
-What's real today (§8 step 3): `config`, `sessionmaker`, `loader`,
-`prompt_engine` (file-only -- the Langfuse overlay lands in §8 step 4).
-`embedding_service` / `retrieval_service` / `checkpointer` / `chat_agent`
-/ `chat_streamer` are wired with the right *shape* -- provider type, name,
-dependency edges -- exactly as later steps (§8 steps 5-6) need it, but
-resolving one of them before its step lands raises `NotImplementedError`
-immediately (see `_not_yet_implemented` below) rather than silently
-importing a class that doesn't exist yet (which would break importing
-this module at all) or returning a half-working object.
+What's real today (§8 step 4): `config`, `sessionmaker`, `loader`,
+`prompt_engine` (both tiers -- bundled `.j2` files, and the Langfuse-by-
+label overlay when `LANGFUSE_PROMPTS=true`), `db_engine`, `runtime_config`,
+`behavior_config`. `embedding_service` / `retrieval_service` /
+`checkpointer` / `chat_agent` / `chat_streamer` are wired with the right
+*shape* -- provider type, name, dependency edges -- exactly as later steps
+(§8 steps 5-6) need it, but resolving one of them before its step lands
+raises `NotImplementedError` immediately (see `_not_yet_implemented`
+below) rather than silently importing a class that doesn't exist yet
+(which would break importing this module at all) or returning a
+half-working object.
 """
 
 from __future__ import annotations
@@ -25,10 +27,13 @@ from typing import Any, NoReturn
 
 from dependency_injector import containers, providers
 
+from core.behavior.loader import BehaviorConfig
 from core.config import settings
-from core.db.engine import SessionLocal
+from core.db.engine import SessionLocal, engine
 from core.prompts.engine import PromptEngine
+from core.prompts.langfuse_client import build_langfuse_prompt_client
 from core.prompts.loader import FileSystemJ2Loader
+from core.runtime_config import RuntimeConfig
 
 
 def _not_yet_implemented(component: str, blueprint_section: str) -> Any:
@@ -61,14 +66,38 @@ class Container(containers.DeclarativeContainer):
     # short transactions instead of pinning a request-scoped session for
     # the whole stream.
     sessionmaker = providers.Object(SessionLocal)
+    # The raw async engine, for collaborators that need a connection rather
+    # than a session-per-unit-of-work -- today just `runtime_config` (§3.2
+    # tier 2, a plain `SELECT` against `config_overrides`, not an ORM
+    # unit-of-work).
+    db_engine = providers.Object(engine)
 
     loader = providers.Singleton(
         FileSystemJ2Loader,
         base_path=f"{settings.CONFIG_DIR}/prompts",
     )
-    # File-only today; the Langfuse-by-label branch + watchfiles hot reload
-    # (§3.5) land in §8 step 4 -- see `core/prompts/engine.py`'s TODO.
-    prompt_engine = providers.Singleton(PromptEngine, loader=loader)
+    # `None` whenever `LANGFUSE_PROMPTS=false` (the offline-first default) --
+    # `PromptEngine` degrades to `loader` alone in that case, never touching
+    # the network (§3.5, design principle #4).
+    langfuse_prompt_client = providers.Singleton(build_langfuse_prompt_client, settings=config)
+    prompt_engine = providers.Singleton(
+        PromptEngine,
+        loader=loader,
+        langfuse_client=langfuse_prompt_client,
+        langfuse_prompts_enabled=settings.LANGFUSE_PROMPTS,
+        label=settings.LANGFUSE_PROMPT_LABEL,
+    )
+
+    # Tier 2 (§3.2): the `config_overrides` kill-switch/feature-toggle
+    # plane. `behavior_config` (below) is its first real consumer -- an
+    # `UPDATE` keyed `behavior.<name>.<dotted.path>` overlays onto the
+    # matching hot-reloaded YAML file without a redeploy.
+    runtime_config = providers.Singleton(RuntimeConfig, engine=db_engine)
+    behavior_config = providers.Singleton(
+        BehaviorConfig,
+        base_path=f"{settings.CONFIG_DIR}/behavior",
+        overrides=runtime_config,
+    )
 
     # --- Not yet implemented -- §8 steps 5-6 build these -------------------
     embedding_service = providers.Singleton(
