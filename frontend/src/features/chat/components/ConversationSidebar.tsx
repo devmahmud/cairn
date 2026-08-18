@@ -202,7 +202,7 @@ export function ConversationSidebar({
       ) : null}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-72 shrink-0 flex-col border-r bg-muted/40 transition-transform duration-200 ease-out",
+          "fixed inset-y-0 left-0 z-50 flex w-72 shrink-0 flex-col border-r bg-muted transition-transform duration-200 ease-out",
           "sm:static sm:z-auto sm:w-64 sm:translate-x-0 sm:transition-none",
           open ? "translate-x-0" : "-translate-x-full",
         )}

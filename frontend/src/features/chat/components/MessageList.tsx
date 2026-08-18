@@ -41,7 +41,7 @@ export function MessageList({
   const statusLabel = activeTurn ? PHASE_LABEL[activeTurn.phase] : undefined;
 
   return (
-    <ScrollArea ref={viewportRef} className="flex-1" viewportClassName="px-4 py-4">
+    <ScrollArea ref={viewportRef} className="min-h-0 flex-1" viewportClassName="px-4 py-4">
       <div
         role="log"
         aria-live="polite"

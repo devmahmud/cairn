@@ -63,7 +63,7 @@ export function ChatContainer() {
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-2 border-b p-3 sm:hidden">
           <Button
             type="button"
