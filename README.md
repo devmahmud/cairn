@@ -7,8 +7,13 @@ chat applications. FastAPI + LangGraph on the backend, Vite + React on the front
 for everything — rows, vectors, and full-text search in one store. Durable by default: the agent loop
 checkpoints at every step, so a dropped connection or a restart resumes right where it left off.
 
-Full architecture, design rationale, and the phase-2 build order live in **[BLUEPRINT.md](./BLUEPRINT.md)**.
-Standing up a new client deployment from this template? Start with **[NEW_CLIENT_CHECKLIST.md](./NEW_CLIENT_CHECKLIST.md)**.
+**New to this repo? Start with [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** — a clear, as-built
+overview of how the running system actually works: the request/streaming flow, the LangGraph agent, RAG,
+auth, guardrails, and a map of what lives where.
+
+Design rationale, the license-audit trail, and the phase-2 build order that produced this codebase live
+in **[BLUEPRINT.md](./BLUEPRINT.md)** (a decision log, not an onboarding doc). Standing up a new client
+deployment from this template? Start with **[NEW_CLIENT_CHECKLIST.md](./NEW_CLIENT_CHECKLIST.md)**.
 
 ## Status
 
