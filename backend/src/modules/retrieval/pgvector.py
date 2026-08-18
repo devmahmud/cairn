@@ -156,5 +156,13 @@ def _to_retrieval_doc(chunk: Chunk, score: float) -> RetrievalDoc:
         content=chunk.content,
         source=str(source) if source is not None else None,
         score=score,
+        # `score` here is `_reciprocal_rank_fusion`'s output -- a rank-fusion
+        # artifact (max ~`2/(k+1)`, §3.8), not a calibrated relevance signal.
+        # `RerankedRetrieval` overwrites both `score` and this flag once it
+        # actually reranks (`modules/retrieval/reranker.py`); bare/unreranked
+        # results must say so, or `agents/chat/nodes/rag.py`'s abstention
+        # check would compare an RRF-scale score against a reranker-scale
+        # threshold and abstain on every query.
+        score_is_calibrated=False,
         metadata=metadata,
     )

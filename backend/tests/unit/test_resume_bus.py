@@ -58,6 +58,9 @@ class _FakeRedisStreams:
         self._kv[name] = value
         return True
 
+    async def get(self, name: str) -> str | None:
+        return self._kv.get(name)
+
     async def exists(self, *names: str) -> int:
         return sum(1 for n in names if n in self._streams or n in self._kv)
 

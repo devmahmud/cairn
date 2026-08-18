@@ -21,8 +21,18 @@ from tests.unit.fakes import FakeChatModel
 
 
 class _FakeBehaviorConfig:
-    def __init__(self, *, top_k: int = 5, abstain_score_threshold: float = 0.15) -> None:
-        self._cfg = {"top_k": top_k, "abstain_score_threshold": abstain_score_threshold}
+    def __init__(
+        self,
+        *,
+        top_k: int = 5,
+        abstain_score_threshold: float = 0.15,
+        abstain_score_threshold_unreranked: float = 0.0,
+    ) -> None:
+        self._cfg = {
+            "top_k": top_k,
+            "abstain_score_threshold": abstain_score_threshold,
+            "abstain_score_threshold_unreranked": abstain_score_threshold_unreranked,
+        }
 
     async def get(self, name: str) -> dict[str, Any]:
         assert name == "retrieval"
@@ -51,7 +61,12 @@ _DOC = RetrievalDoc(
 )
 
 
-def _node(*, docs: list[RetrievalDoc] | Exception, llm: FakeChatModel | None = None) -> RagNode:
+def _node(
+    *,
+    docs: list[RetrievalDoc] | Exception,
+    llm: FakeChatModel | None = None,
+    behavior_config: _FakeBehaviorConfig | None = None,
+) -> RagNode:
     def llm_factory(role: str) -> FakeChatModel:
         assert role == "rag"
         assert llm is not None, "generation should not be attempted for this scenario"
@@ -60,7 +75,7 @@ def _node(*, docs: list[RetrievalDoc] | Exception, llm: FakeChatModel | None = N
     return RagNode(
         prompt_engine=_PROMPT_ENGINE,
         retrieval_service=_FakeRetrievalService(docs),
-        behavior_config=_FakeBehaviorConfig(),
+        behavior_config=behavior_config or _FakeBehaviorConfig(),
         llm_factory=llm_factory,
     )
 
@@ -118,3 +133,44 @@ async def test_defers_with_error_code_when_retrieval_raises() -> None:
 
     assert result["abstained"] is True
     assert result["error"] == "rag_retrieval_failed"
+
+
+# --- Unreranked (RRF-scale) scores use their own threshold, not the
+# reranker-calibrated one (regression coverage for the bug where every
+# unreranked query abstained unconditionally: `PgVectorHybridRetrievalService`'s
+# bare RRF score, `k=60`, tops out around `2/61 ≈ 0.033` -- always below the
+# reranker-scale `0.15` default). Uses that real RRF magnitude, not a
+# hand-picked reranker-scale number like `_DOC`'s `0.8` above, so this
+# regresses loudly if the two scales ever get compared against each other
+# again. ------------------------------------------------------------------
+
+_UNRERANKED_DOC = _DOC.model_copy(update={"score": 2.0 / 61.0, "score_is_calibrated": False})
+
+
+async def test_grounds_answer_on_a_realistic_unreranked_rrf_score() -> None:
+    """A top-of-both-lists RRF score (~0.033) is nowhere near the
+    reranker-scale `0.15` default -- comparing it against that threshold
+    would abstain here. It must ground instead."""
+    node = _node(
+        docs=[_UNRERANKED_DOC],
+        llm=FakeChatModel(responses=[AIMessage(content="Use a bearer token [1].")]),
+    )
+
+    result = await node(_state())
+
+    assert result["abstained"] is False
+    assert result["answer"] == "Use a bearer token [1]."
+
+
+async def test_abstains_on_unreranked_score_below_the_unreranked_threshold() -> None:
+    """The unreranked threshold is independently configurable and honored,
+    same as the reranked-scale one already is."""
+    weak_doc = _UNRERANKED_DOC.model_copy(update={"score": 0.01})
+    node = _node(
+        docs=[weak_doc],
+        behavior_config=_FakeBehaviorConfig(abstain_score_threshold_unreranked=0.02),
+    )
+
+    result = await node(_state())
+
+    assert result["abstained"] is True

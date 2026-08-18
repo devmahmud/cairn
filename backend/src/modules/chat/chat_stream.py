@@ -35,6 +35,7 @@ simple mode when Redis isn't configured (§3.7: "not error").
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -88,6 +89,27 @@ _CUSTOM_WRITER_NODES = frozenset({"rag"})
 #: which route through the same `guardrail` node.
 _GUARDRAIL_BLOCKED_ERRORS = frozenset({"input_rail_blocked", "output_rail_blocked"})
 
+#: Per-`(conversation_id, idempotency_key)` turn-completion signal (§3.3's
+#: "a retry never re-runs the graph" guarantee). `begin_turn` claims one the
+#: moment it inserts a genuinely new turn's user message, and `_run_turn`
+#: releases it -- however the turn ends -- once there's something to replay
+#: (or definitively nothing, on an unhandled failure). A retry that arrives
+#: while the original attempt is still generating (no assistant reply
+#: persisted yet, so `_existing_reply` alone can't tell "still running" from
+#: "never happened") waits on this instead of independently re-running the
+#: whole graph -- the common case this closes is a client re-POSTing
+#: because the SSE response looked hung while the server was still
+#: streaming.
+#:
+#: Process-local by design, same reasoning as `_DURABLE_PRODUCER_TASKS`
+#: below: a retry that lands on a *different* replica in a multi-process
+#: deployment finds no local marker and falls through to re-running the
+#: graph, same as before this fix. Closing that cross-replica window needs a
+#: distributed lock (a Postgres advisory lock, or a Redis-backed one) --
+#: out of scope here; this fixes the single-process race, which is what a
+#: client retrying against one backend instance actually hits.
+_INFLIGHT_TURNS: dict[tuple[UUID, str], asyncio.Event] = {}
+
 
 @asynccontextmanager
 async def _unit_of_work(
@@ -113,15 +135,31 @@ class TurnContext:
     the original attempt, if the turn had already finished, so a retry never
     re-runs the graph (and never double-fires an LLM call, however
     idempotent the rest of the turn is) -- it just re-plays the same result.
-    `None` means either no key was given, or this is genuinely the first
-    attempt.
+    `None` means either no key was given, this is genuinely the first
+    attempt, or (bounded by `TURN_BUDGET_SECONDS`) a concurrent original
+    attempt never finished within `begin_turn`'s wait -- see
+    `_INFLIGHT_TURNS`'s docstring.
+
+    `user_message_id` is the persisted user `Message` row's own id --
+    distinct from `message_id` (this turn's *assistant* reply id, freshly
+    minted here even on a replay). `_persist_reply` stamps it onto the
+    assistant reply's `reply_to_message_id` so a later retry can look its
+    answer up directly (`MessageRepository.get_reply_to`) instead of
+    guessing from conversation recency.
+
+    `inflight_key` is set only when this turn just claimed the in-flight
+    marker for its `(conversation_id, idempotency_key)` (i.e. it's a
+    genuinely new turn with an idempotency key, not a replay) -- `None`
+    means there's nothing for `_run_turn` to release.
     """
 
     conversation_id: UUID
     user_id: UUID
     text: str
     message_id: UUID
+    user_message_id: UUID
     replay: Message | None
+    inflight_key: tuple[UUID, str] | None = None
 
 
 class ChatStreamer:
@@ -189,27 +227,63 @@ class ChatStreamer:
                 citations=[],
                 idempotency_key=idempotency_key,
             )
-            _user_message, created = await messages.create_idempotent(user_message)
+            inserted_user_message, created = await messages.create_idempotent(user_message)
 
             replay: Message | None = None
             if not created:
-                replay = await self._existing_reply(messages, conversation_id)
+                replay = await self._existing_reply(messages, inserted_user_message.id)
+
+        # Everything past this point runs *outside* the transaction above --
+        # §3.3's session discipline applies to the in-flight wait below just
+        # as much as it does to the LLM call itself: never hold a session
+        # open across something that can take turn-length time.
+        inflight_key: tuple[UUID, str] | None = None
+        if idempotency_key is not None:
+            key = (conversation_id, idempotency_key)
+            if created:
+                _INFLIGHT_TURNS[key] = asyncio.Event()
+                inflight_key = key
+            elif replay is None:
+                replay = await self._await_inflight_then_recheck(
+                    key, user_message_id=inserted_user_message.id
+                )
 
         return TurnContext(
             conversation_id=conversation_id,
             user_id=user_id,
             text=text,
             message_id=uuid4(),
+            user_message_id=inserted_user_message.id,
             replay=replay,
+            inflight_key=inflight_key,
         )
 
     @staticmethod
-    async def _existing_reply(messages: MessageRepository, conversation_id: UUID) -> Message | None:
-        page = await messages.list_for_conversation(conversation_id, limit=1)
-        if not page.items:
-            return None
-        candidate = page.items[0]
-        return candidate if candidate.role == "assistant" else None
+    async def _existing_reply(messages: MessageRepository, user_message_id: UUID) -> Message | None:
+        return await messages.get_reply_to(user_message_id)
+
+    async def _await_inflight_then_recheck(
+        self, key: tuple[UUID, str], *, user_message_id: UUID
+    ) -> Message | None:
+        """A retry found its own user message already inserted, but no reply
+        for it yet -- either the original attempt is still generating (in
+        this same process), it finished and this lookup just raced its
+        commit, or it's running on a different process/replica entirely (no
+        local marker to wait on -- `_INFLIGHT_TURNS`'s docstring on that
+        limitation).
+
+        Waits on the local in-flight signal, bounded by `TURN_BUDGET_SECONDS`
+        (the same ceiling the turn itself runs under -- if the original truly
+        died without ever releasing it, this doesn't hang forever), then
+        re-checks for a persisted reply in a fresh, short transaction.
+        """
+        event = _INFLIGHT_TURNS.get(key)
+        if event is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(event.wait(), timeout=self._settings.TURN_BUDGET_SECONDS)
+
+        async with _unit_of_work(self._sessionmaker) as session:
+            return await self._existing_reply(MessageRepository(session), user_message_id)
 
     # --- Simple mode ---------------------------------------------------------
 
@@ -265,6 +339,24 @@ class ChatStreamer:
                 yield event
             return
 
+        try:
+            async for event in self._generate_and_persist(turn, stream_id=stream_id):
+                yield event
+        finally:
+            # Release the in-flight marker *after* this generator is fully
+            # done producing events (normal completion, an early `return` in
+            # either `except` block below, or the consumer closing it early,
+            # e.g. `run_durable_producer` breaking on a stop request) --
+            # whichever way this turn ends, a concurrent retry waiting in
+            # `_await_inflight_then_recheck` above needs to stop waiting.
+            if turn.inflight_key is not None:
+                inflight_event = _INFLIGHT_TURNS.pop(turn.inflight_key, None)
+                if inflight_event is not None:
+                    inflight_event.set()
+
+    async def _generate_and_persist(
+        self, turn: TurnContext, *, stream_id: str | None
+    ) -> AsyncIterator[ChatSSEEvent]:
         translator = _EventTranslator(
             conversation_id=turn.conversation_id, message_id=turn.message_id, stream_id=stream_id
         )
@@ -329,8 +421,33 @@ class ChatStreamer:
                     content=answer_text,
                     artifacts=[],
                     citations=citations_raw,
+                    reply_to_message_id=turn.user_message_id,
                 )
             )
+
+    # --- Durable-mode stream ownership (§3.9's ownership-check principle) ----
+
+    async def record_stream_owner(self, *, stream_id: str, user_id: UUID) -> None:
+        """Bind a just-spawned durable stream to the user who started it.
+
+        Called synchronously from `modules/chat/router.py::_start_chat_turn`
+        before the response (carrying `X-Stream-Id`) is returned -- so
+        there's no window where a client could already have the `stream_id`
+        but the ownership record doesn't exist yet.
+        """
+        assert self._stream_bus is not None
+        await self._stream_bus.record_owner(stream_id, str(user_id))
+
+    async def is_stream_owner(self, *, stream_id: str, user_id: UUID) -> bool:
+        """`True` unless the stream has a *different* recorded owner --
+        i.e. fails open on "no owner on record" (unknown/expired stream_id)
+        rather than turning a TTL expiry into a spurious rejection for the
+        stream's own rightful owner. Callers (`resume_chat_stream`/
+        `stop_chat_stream`) already have their own "stream not found"
+        handling for the unknown case."""
+        assert self._stream_bus is not None
+        owner = await self._stream_bus.get_owner(stream_id)
+        return owner is None or owner == str(user_id)
 
 
 def _replay_events(message: Message, *, message_id: UUID) -> list[ChatSSEEvent]:

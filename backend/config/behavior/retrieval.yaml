@@ -22,4 +22,23 @@ top_k: 5
 # score, not `0.0` (§3.8: "RAG abstains on low *reranker* score, calibrated,
 # not `0.0`") -- `0.0` would only catch a completely empty result set, not a
 # retrieval that returned *something* but nothing actually relevant.
+# Applies whenever the top doc's score is a calibrated relevance signal
+# (`RetrievalDoc.score_is_calibrated=True`) -- i.e. it went through
+# `RerankedRetrieval`, or came from the local fixture.
 abstain_score_threshold: 0.15
+
+# The threshold used instead of `abstain_score_threshold` when the top doc's
+# score is *not* calibrated (`RetrievalDoc.score_is_calibrated=False`) -- the
+# bare `PgVectorHybridRetrievalService` path (`RERANK_ENABLED=false`, no
+# `RERANKER_BASE_URL` configured, or a reranker that's unreachable at request
+# time). Its score is a Reciprocal Rank Fusion rank artifact, not a relevance
+# probability -- with the default `rrf_k=60` it tops out around `2/61 ≈
+# 0.033`, nowhere near `abstain_score_threshold`'s reranker-calibrated `0.15`,
+# so reusing that threshold here would make the node abstain on every single
+# query once reranking is out of the picture. RRF carries no absolute-quality
+# signal to calibrate a non-zero bar against without a real per-corpus eval
+# set (§3.11's retrieval eval is the place to tune this) -- `0.0` only
+# catches a genuinely empty candidate set, same as the empty-results check
+# that runs before this one; an unreranked deployment otherwise answers from
+# best-effort hybrid results rather than abstaining unconditionally.
+abstain_score_threshold_unreranked: 0.0

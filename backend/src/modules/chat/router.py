@@ -120,6 +120,12 @@ async def _start_chat_turn(
         return _TurnHandle(turn=turn, stream_id=None)
 
     stream_id = uuid4().hex
+    # Recorded *before* the response (carrying this id) goes out, and before
+    # the producer task is even spawned -- so a client can never observe a
+    # `stream_id` for which the ownership check below would find no owner
+    # yet (§3.9's ownership-check principle, extended to the stream tail/
+    # stop endpoints; see `resume_chat_stream`/`stop_chat_stream`).
+    await streamer.record_stream_owner(stream_id=stream_id, user_id=user_id)
     response.headers["X-Stream-Id"] = stream_id
     spawn_durable_producer(streamer, stream_id=stream_id, turn=turn)
     return _TurnHandle(turn=turn, stream_id=stream_id)
@@ -144,6 +150,40 @@ async def _require_durable_streamer(streamer: StreamerDep) -> ChatStreamer:
 
 
 DurableStreamerDep = Annotated[ChatStreamer, Depends(_require_durable_streamer)]
+
+
+async def _ensure_stream_owned(streamer: ChatStreamer, *, stream_id: str, user_id: UUID) -> None:
+    """`404`, not `403` -- deliberately doesn't distinguish "not yours" from
+    "doesn't exist" in the response, so a caller can't use this endpoint to
+    fish for which `stream_id`s are real (§3.9's ownership-check principle:
+    every conversations/messages-adjacent query is scoped to the caller,
+    not just the router-level "some authenticated user" check `Depends(
+    get_current_user_id)` alone provides). A `stream_id` with no recorded
+    owner (unknown, or its TTL already expired) passes this check -- the
+    existing "stream not found" handling below (durable-mode 404, `/stop`'s
+    `stream_known` check) is what actually rejects that case; this only
+    ever blocks a *known-to-belong-to-someone-else* stream.
+    """
+    if not await streamer.is_stream_owner(stream_id=stream_id, user_id=user_id):
+        raise NotFoundError(f"Stream {stream_id!r} not found.")
+
+
+async def _ensure_stream_owned_dep(
+    stream_id: str, streamer: DurableStreamerDep, user_id: UserIdDep
+) -> None:
+    """Dependency wrapper around `_ensure_stream_owned`, for `resume_chat_stream`.
+
+    Same reasoning as `_require_durable_streamer` above: `resume_chat_stream`
+    is a generator-based `EventSourceResponse` endpoint, so calling
+    `_ensure_stream_owned` from *inside* its body raises after FastAPI's
+    native SSE machinery has already committed a `200` and started streaming
+    -- the ownership rejection would land as a broken mid-stream connection,
+    not a clean `404`. Running it as a dependency instead fails before any of
+    that happens. `stop_chat_stream` isn't a streaming endpoint, so it calls
+    `_ensure_stream_owned` directly and doesn't need this wrapper.
+    """
+    await _ensure_stream_owned(streamer, stream_id=stream_id, user_id=user_id)
+
 
 #: `openapi_extra`-free, plain `responses=` override (§3.7): SSE endpoints
 #: return `ServerSentEvent`s, not a `response_model`, so this is the only way
@@ -175,7 +215,7 @@ async def start_chat_turn(
 async def resume_chat_stream(
     stream_id: str,
     streamer: DurableStreamerDep,
-    _user_id: UserIdDep,
+    _owned: Annotated[None, Depends(_ensure_stream_owned_dep)],
     last_event_id: Annotated[str | None, Query()] = None,
 ) -> AsyncIterator[ServerSentEvent]:
     async for event in streamer.tail_durable(stream_id=stream_id, last_event_id=last_event_id):
@@ -184,9 +224,10 @@ async def resume_chat_stream(
 
 @router.post("/stream/{stream_id}/stop", status_code=status.HTTP_204_NO_CONTENT)
 async def stop_chat_stream(
-    stream_id: str, streamer: DurableStreamerDep, _user_id: UserIdDep
+    stream_id: str, streamer: DurableStreamerDep, user_id: UserIdDep
 ) -> None:
     assert streamer.stream_bus is not None
+    await _ensure_stream_owned(streamer, stream_id=stream_id, user_id=user_id)
 
     stream_known = await streamer.stream_bus.request_stop(stream_id)
     cancelled_locally = cancel_durable_producer(stream_id)

@@ -85,6 +85,16 @@ class Message(Base):
     # (`conversation_id`, `idempotency_key`) `WHERE idempotency_key IS NOT
     # NULL` -- see `repository.py::MessageRepository.create_idempotent`.
     idempotency_key: Mapped[str | None] = mapped_column(String(255))
+    # Self-referential: set only on an assistant reply, pointing at the
+    # specific user `Message` it answers (`modules/chat/chat_stream.py`'s
+    # `ChatStreamer._persist_reply`). A partial unique index (migration
+    # `e7c4a9f21b56`) enforces "at most one reply per user message" and
+    # doubles as the lookup index `MessageRepository.get_reply_to` needs to
+    # replay a retried turn's *own* reply instead of guessing from
+    # conversation recency (§3.3).
+    reply_to_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

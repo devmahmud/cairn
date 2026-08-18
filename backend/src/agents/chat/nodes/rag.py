@@ -43,6 +43,21 @@ logger = structlog.get_logger(__name__)
 
 _DEFAULT_TOP_K = 5
 _DEFAULT_ABSTAIN_THRESHOLD = 0.15
+#: Reciprocal Rank Fusion is a rank-based fusion score, not a relevance
+#: probability -- with `modules/retrieval/pgvector.py`'s default
+#: `DEFAULT_RRF_K=60` it tops out around `2/61 ≈ 0.033`, so comparing it
+#: against `_DEFAULT_ABSTAIN_THRESHOLD` (calibrated for a cross-encoder
+#: reranker's ~[0, 1] score) would abstain on *every* query whenever
+#: reranking is skipped or unavailable (`RERANK_ENABLED=false`, or
+#: `RerankedRetrieval`'s no-reranker-configured/reranker-unreachable
+#: fallback -- both documented, supported configurations, §3.8). RRF's rank
+#: fusion carries no absolute-quality signal to calibrate a non-zero bar
+#: against without a real per-corpus eval set (§3.11's retrieval eval is the
+#: place to tune this) -- `0.0` only catches a genuinely empty candidate
+#: set here, same as the `not docs` check just above it, so an unreranked
+#: deployment answers from best-effort hybrid results instead of abstaining
+#: unconditionally.
+_DEFAULT_ABSTAIN_THRESHOLD_UNRERANKED = 0.0
 
 _ABSTAIN_MESSAGE = (
     "I found some related documentation, but nothing confident enough to "
@@ -85,9 +100,6 @@ class RagNode(GraphNode[ChatState]):
         question = state.get("input", "")
         retrieval_cfg = await self._behavior_config.get("retrieval")
         top_k = int(retrieval_cfg.get("top_k", _DEFAULT_TOP_K))
-        abstain_threshold = float(
-            retrieval_cfg.get("abstain_score_threshold", _DEFAULT_ABSTAIN_THRESHOLD)
-        )
 
         try:
             docs = await self._retrieval_service.query(question, top_k)
@@ -102,6 +114,17 @@ class RagNode(GraphNode[ChatState]):
         if not docs:
             logger.info("rag.no_results_deferring")
             return _defer_result()
+
+        if docs[0].score_is_calibrated:
+            abstain_threshold = float(
+                retrieval_cfg.get("abstain_score_threshold", _DEFAULT_ABSTAIN_THRESHOLD)
+            )
+        else:
+            abstain_threshold = float(
+                retrieval_cfg.get(
+                    "abstain_score_threshold_unreranked", _DEFAULT_ABSTAIN_THRESHOLD_UNRERANKED
+                )
+            )
 
         if docs[0].score < abstain_threshold:
             logger.info(

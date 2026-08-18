@@ -81,6 +81,16 @@ class MessageRepository(BaseRepository[Message]):
             limit=limit,
         )
 
+    async def get_reply_to(self, user_message_id: UUID) -> Message | None:
+        """The assistant reply persisted for a specific user message, if any
+        (`reply_to_message_id`, migration `e7c4a9f21b56`) -- what
+        `modules/chat/chat_stream.py::ChatStreamer._existing_reply` uses to
+        replay a retried turn's *own* reply, instead of the unsound "most
+        recent message in the conversation" heuristic it used to rely on
+        (§3.3)."""
+        stmt = select(Message).where(Message.reply_to_message_id == user_message_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def create_idempotent(self, message: Message) -> tuple[Message, bool]:
         """Insert a message, honoring the idempotency partial-unique index
         (`uq_messages_conversation_idempotency_key`, §3.3).

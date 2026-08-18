@@ -9,7 +9,7 @@ import { useParams } from "react-router";
 import { ChatInput } from "@/features/chat/components/ChatInput";
 import { ConversationSidebar } from "@/features/chat/components/ConversationSidebar";
 import { MessageList } from "@/features/chat/components/MessageList";
-import { useMessages } from "@/features/chat/hooks/use-conversations";
+import { useInvalidateMessages, useMessages } from "@/features/chat/hooks/use-conversations";
 import { useStreamingChat } from "@/features/chat/hooks/use-streaming-chat";
 import { useChatStore } from "@/features/chat/stores/chat-store";
 import { DebugPanel } from "@/features/debug";
@@ -35,12 +35,32 @@ export function ChatContainer() {
   const lastError = useChatStore((s) => s.lastError);
   const resetForConversation = useChatStore((s) => s.resetForConversation);
   const { sendMessage, stopStreaming } = useStreamingChat(conversationId);
+  const invalidateMessages = useInvalidateMessages();
 
   useReducedMotionSync();
 
   useEffect(() => {
     resetForConversation();
-  }, [conversationId, resetForConversation]);
+    // Cleanup runs with the *previous* render's `conversationId`, right
+    // before this effect re-runs for a new one (or on unmount) -- i.e.
+    // exactly when we're navigating away from a conversation, and its
+    // `useMessages` query observer has already gone inactive (§4.3:
+    // completed turns before now live only in `completedTurns`, a
+    // client-only store `resetForConversation` above just wiped -- see
+    // `chat-store.ts`'s module docstring). Marking the REST cache stale
+    // here, not on every `message_end`, avoids racing `_persist_reply`
+    // (which commits *after* the SSE stream already finished) and avoids
+    // an unnecessary refetch while still viewing the conversation, since
+    // `completedTurns` already renders the just-finished turn locally.
+    // Invalidating an inactive query only marks it stale (no immediate
+    // network call); the next mount that observes it will refetch, so a
+    // conversation revisited within `gcTime` shows the full transcript
+    // instead of the pre-turn snapshot the `staleTime: Infinity` cache
+    // would otherwise still be serving.
+    return () => {
+      if (conversationId) void invalidateMessages(conversationId);
+    };
+  }, [conversationId, resetForConversation, invalidateMessages]);
 
   const isBusy = activeTurn !== null;
 

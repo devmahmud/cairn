@@ -58,6 +58,7 @@ class RedisStreamClient(Protocol):
         self, streams: Any, count: int | None = ..., block: int | None = ...
     ) -> Awaitable[Any]: ...
     def set(self, name: str, value: str, ex: int | None = ...) -> Awaitable[Any]: ...
+    def get(self, name: str) -> Awaitable[Any]: ...
     def exists(self, *names: str) -> Awaitable[Any]: ...
     def expire(self, name: str, time: int) -> Awaitable[Any]: ...
 
@@ -100,6 +101,38 @@ class RedisStreamBus:
     @staticmethod
     def _stop_key(stream_id: str) -> str:
         return f"chat:stream:{stream_id}:stop"
+
+    @staticmethod
+    def _owner_key(stream_id: str) -> str:
+        return f"chat:stream:{stream_id}:owner"
+
+    async def record_owner(self, stream_id: str, user_id: str) -> None:
+        """Bind a durable-mode stream to the user who started it (§3.9's
+        "ownership checks enforced on every conversations/messages query"
+        principle, extended to the stream tail/stop endpoints -- see
+        `modules/chat/router.py`'s ownership check).
+
+        Called synchronously from `_start_chat_turn`, before the request
+        returns `X-Stream-Id` to the client -- not from inside the
+        (decoupled, may-not-have-run-yet) producer task -- so there is no
+        window where a client that already has the `stream_id` could race a
+        resume/stop call against this write.
+        """
+        await self._redis.set(self._owner_key(stream_id), user_id, ex=_STREAM_TTL_SECONDS)
+
+    async def get_owner(self, stream_id: str) -> str | None:
+        """`None` means "no owner on record" -- either the stream doesn't
+        exist (never spawned, or its TTL already expired) or predates this
+        ownership tracking; callers that need "stream not found" vs. "stream
+        exists but isn't yours" distinguished separately (as
+        `modules/chat/router.py` does) already have another way to check
+        existence (`request_stop`'s return value, `replay_and_tail`'s own
+        "nothing buffered" case) -- this alone intentionally doesn't fail
+        closed on "unknown", to avoid turning a TTL expiry into a spurious
+        403/404 for the stream's own rightful owner.
+        """
+        value = await self._redis.get(self._owner_key(stream_id))
+        return str(value) if value is not None else None
 
     async def publish(self, stream_id: str, *, sse_id: str, event: str, data: str) -> None:
         key = self._events_key(stream_id)

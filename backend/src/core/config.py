@@ -54,7 +54,6 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_LIFETIME_SECONDS: int = 60 * 60 * 24 * 30
     LANGFUSE_ENABLED: bool = False
     LANGFUSE_PROMPTS: bool = False
-    SESSION_SWEEPER_ENABLED: bool = False
 
     # --- Guardrails (§3.12) ---------------------------------------------
     # Granite Guardian (IBM, Apache-2.0) as the guard/classifier model --

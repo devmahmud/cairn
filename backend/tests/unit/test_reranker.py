@@ -36,13 +36,20 @@ class _ReversingReranker:
         return [float(index) for index in range(len(documents))]
 
 
-def _doc(doc_id: str, *, parent_id: str | None = None, score: float = 0.5) -> RetrievalDoc:
+def _doc(
+    doc_id: str,
+    *,
+    parent_id: str | None = None,
+    score: float = 0.5,
+    score_is_calibrated: bool = True,
+) -> RetrievalDoc:
     return RetrievalDoc(
         id=doc_id,
         document_id="doc-1",
         parent_id=parent_id,
         content=f"content {doc_id}",
         score=score,
+        score_is_calibrated=score_is_calibrated,
     )
 
 
@@ -56,8 +63,21 @@ async def test_falls_back_to_unreranked_candidates_when_reranker_fails() -> None
     assert [doc.id for doc in results] == ["a", "b"]
 
 
+async def test_falls_back_candidates_keep_the_inner_services_calibration_flag() -> None:
+    """A reranker-unavailable fallback must *not* claim the unreranked
+    (e.g. RRF-scale) scores it's returning are calibrated -- `rag.py`'s
+    abstention check picks its threshold off exactly this flag (§3.8)."""
+    docs = [_doc("a", score=0.03, score_is_calibrated=False)]
+    inner: RetrievalService = _FakeInnerRetrieval(docs)
+    service = RerankedRetrieval(inner, _FailingReranker())
+
+    results = await service.query("anything", top_k=1)
+
+    assert results[0].score_is_calibrated is False
+
+
 async def test_reorders_candidates_by_reranker_score() -> None:
-    docs = [_doc("a"), _doc("b"), _doc("c")]
+    docs = [_doc("a", score_is_calibrated=False), _doc("b"), _doc("c")]
     inner: RetrievalService = _FakeInnerRetrieval(docs)
     service = RerankedRetrieval(inner, _ReversingReranker())
 
@@ -66,6 +86,9 @@ async def test_reorders_candidates_by_reranker_score() -> None:
     # `_ReversingReranker` scores index 0 lowest, last index highest --
     # the last candidate should now rank first.
     assert [doc.id for doc in results] == ["c", "b", "a"]
+    # A successful rerank always overwrites the calibration flag to `True`,
+    # regardless of what the wrapped inner service reported (§3.8).
+    assert all(doc.score_is_calibrated for doc in results)
 
 
 async def test_dedupes_by_parent_id_after_truncating_to_top_k() -> None:

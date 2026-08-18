@@ -48,7 +48,6 @@ feature_flags:
   stream_durable: false
   langfuse_enabled: false
   mcp_enabled: false
-  session_sweeper_enabled: false
 
 deployment:
   database_name: app

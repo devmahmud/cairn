@@ -216,7 +216,7 @@ cairn/
 │   │   │   ├── middleware/  errors/  security/  observability/  cache/
 │   │   ├── modules/              # vertical slices
 │   │   │   ├── chat/             # streaming endpoint + SSE contract + streamer
-│   │   │   ├── conversations/    # conversation/message lifecycle REST + sweeper
+│   │   │   ├── conversations/    # conversation/message lifecycle REST
 │   │   │   ├── retrieval/        # hybrid RAG over pgvector (Protocol+factory+fixture)
 │   │   │   ├── embedding/  ingestion/  auth/  health/
 │   │   ├── agents/               # LangGraph; emits NO SSE; checkpointed
@@ -276,7 +276,6 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "change-me"
     LANGFUSE_ENABLED: bool = False
     LANGFUSE_PROMPTS: bool = False       # true → fetch prompts by label, fallback to bundled files
-    SESSION_SWEEPER_ENABLED: bool = False
     MCP_ENABLED: bool = False
 ```
 
@@ -548,8 +547,12 @@ vectors) or graduate to **Qdrant** — both behind the unchanged Protocol.
   `censor_sensitive_data` processor — *logs only*) + **Prometheus `/metrics`**
   (`prometheus-fastapi-instrumentator`). **`/health/live`** (static) and **`/health/ready`** (checks DB,
   Redis, LLM reachability).
-- **Sweeper** (optional) → **Postgres advisory-lock leader election** + `FOR UPDATE SKIP LOCKED` so a
-  multi-replica deploy can't double-summarize (v1 ported this bug).
+- **Sweeper** (documented pattern, not shipped) → if you add a background conversation-summary job,
+  give it **Postgres advisory-lock leader election** + `FOR UPDATE SKIP LOCKED` so a multi-replica
+  deploy can't double-summarize (v1 ported this bug). Nothing under `modules/conversations/` runs one
+  today — there's no summarization job to guard yet — so this template deliberately doesn't ship a
+  `SESSION_SWEEPER_ENABLED`-style toggle with no code behind it; add both together if/when a sweeper
+  is actually built.
 
 ### 3.10 Cache & limits (`core/limits/`, `core/cache/`)
 

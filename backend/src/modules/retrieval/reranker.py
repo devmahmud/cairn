@@ -105,7 +105,17 @@ class RerankedRetrieval:
         reranked = sorted(
             zip(candidates, scores, strict=True), key=lambda pair: pair[1], reverse=True
         )
-        top = [doc.model_copy(update={"score": score}) for doc, score in reranked[:top_k]]
+        # Overwrites the inner service's score *and* marks it calibrated --
+        # this is now a real cross-encoder relevance score in ~[0, 1], not
+        # whatever rank-fusion artifact the wrapped service produced
+        # (§3.8, `RetrievalDoc.score_is_calibrated`'s docstring). The
+        # `except` branch above returns `candidates` unmodified, so a
+        # reranker-unavailable fallback correctly keeps reporting
+        # `score_is_calibrated=False` if the inner service does.
+        top = [
+            doc.model_copy(update={"score": score, "score_is_calibrated": True})
+            for doc, score in reranked[:top_k]
+        ]
         return _dedupe_by_parent(top)
 
 
