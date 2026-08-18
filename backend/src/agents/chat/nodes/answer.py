@@ -1,10 +1,4 @@
-"""`answer` -- a plain, ungrounded reply (BLUEPRINT.md §3.6).
-
-For turns `route` sends here (today: the `greeting` intent, per
-`config/behavior/routing.yaml`) -- no retrieval, no tools, just the
-assistant's system prompt plus the user's message. Distinct from `rag`,
-which grounds its answer in retrieved passages and can abstain.
-"""
+"""Plain, ungrounded reply -- no retrieval, no tools. Distinct from rag, which grounds its answer in retrieved passages and can abstain."""
 
 from __future__ import annotations
 
@@ -61,9 +55,7 @@ class AnswerNode(GraphNode[ChatState]):
                 [SystemMessage(content=system_prompt), HumanMessage(content=question)]
             )
         except Exception:
-            # Fallback ladder (§3.6): any failure here -- timeout, provider
-            # error, prompt-render error -- degrades to one graceful
-            # message rather than failing the turn.
+            # Any failure here -- timeout, provider error, prompt-render error -- degrades to one graceful message rather than failing the turn.
             logger.warning("answer.failed_falling_back_to_graceful_message", exc_info=True)
             return {
                 "messages": [AIMessage(content=_FALLBACK_MESSAGE)],

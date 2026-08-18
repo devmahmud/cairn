@@ -1,17 +1,4 @@
-"""Output guardrail hook -- real rails, no-op unless `GUARDRAILS_ENABLED` (BLUEPRINT.md §3.6, §3.12).
-
-The mirror of `input_rail.py`: delegates to `core/guardrails/rails.py::
-output_rail` (PII redaction + optional Granite Guardian classification)
-over `state["answer"]`. Every branch (`answer`/`rag`/`tool`/`guardrail`)
-converges on this node before `END` (§3.6's diagram), so it's the single
-choke point for the final answer text.
-
-**Streaming caveat** -- see `core/guardrails/rails.py`'s module docstring:
-by the time this node runs, the branch that produced `state["answer"]` has
-already streamed it over SSE. This node's redaction reaches what gets
-*persisted* (via the turn's `final_state`, `modules/chat/chat_stream.py`),
-not bytes already on the wire.
-"""
+"""Redaction here reaches what gets persisted, not bytes already streamed over SSE by the branch that produced state["answer"] -- see rails.py."""
 
 from __future__ import annotations
 

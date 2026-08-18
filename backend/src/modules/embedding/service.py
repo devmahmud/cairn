@@ -1,14 +1,4 @@
-"""`OpenAIEmbeddingService` -- an OpenAI-compatible embeddings client (BLUEPRINT.md §3.8).
-
-Same swap-point pattern as `agents/llm.py`'s `get_llm()`: point
-`OPENAI_BASE_URL` at a self-hosted OpenAI-compatible embeddings endpoint
-(vLLM or Text-Embeddings-Inference serving `EMBEDDING_MODEL`, default
-`Qwen3-Embedding-0.6B`, Apache-2.0) or leave it blank to use OpenAI's own
-hosted `text-embedding-3-small` as the opt-in alternative (§1's stack table,
-§3.8). Either way, the rest of the codebase only ever depends on the
-`EmbeddingService` Protocol below, never `langchain_openai.OpenAIEmbeddings`
-directly.
-"""
+"""Same swap-point pattern as agents/llm.py -- point OPENAI_BASE_URL at a self-hosted embeddings endpoint, or leave blank for OpenAI's hosted API."""
 
 from __future__ import annotations
 
@@ -27,8 +17,6 @@ class EmbeddingService(Protocol):
 
 
 class OpenAIEmbeddingService:
-    """`EmbeddingService` backed by any OpenAI-compatible `/embeddings` endpoint."""
-
     def __init__(
         self,
         *,
@@ -42,12 +30,7 @@ class OpenAIEmbeddingService:
             model=model,
             base_url=base_url or None,
             api_key=SecretStr(api_key or "not-needed-for-local-model"),
-            # Self-hosted/non-OpenAI model names (e.g. `Qwen3-Embedding-0.6B`)
-            # aren't in `tiktoken`'s registry, and this "safe length" pre-check
-            # is only meaningful for OpenAI's own hosted models anyway --
-            # disabling it means every request goes straight to the
-            # configured endpoint instead of failing on a local tokenizer
-            # lookup for a model tiktoken has never heard of.
+            # Self-hosted model names (e.g. Qwen3-Embedding-0.6B) aren't in tiktoken's registry -- disabling this pre-check avoids a lookup failure.
             check_embedding_ctx_length=False,
         )
 

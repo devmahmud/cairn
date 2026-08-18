@@ -1,16 +1,4 @@
-"""Ingestion pipeline (BLUEPRINT.md §3.8, §8 step 5): chunk -> embed -> upsert.
-
-Invoked by `make ingest` (`modules/ingestion/cli.py`) against
-`backend/data/sample_corpus/` -- the docs-assistant example's corpus, but
-`ingest_directory` works against any directory of `.md`/`.txt` files.
-
-**Upsert semantics.** Documents are matched by `source` (the file's path):
-re-running ingestion against an unchanged corpus finds the same `Document`
-rows and replaces their `Chunk`s wholesale rather than appending duplicates
--- re-ingesting is idempotent, the same "safe to run twice" property §3.3
-gives message inserts via `idempotency_key`, applied here to a batch
-pipeline instead of a single request.
-"""
+"""Chunk -> embed -> upsert. Documents matched by source path; re-ingesting replaces a document's chunks wholesale rather than appending duplicates."""
 
 from __future__ import annotations
 
@@ -28,11 +16,7 @@ from modules.retrieval.models import Chunk, Document
 
 logger = structlog.get_logger(__name__)
 
-#: Bumped whenever `EMBEDDING_MODEL`/`EMBEDDING_DIMENSION` changes in a way
-#: that invalidates previously-stored vectors -- stored per-chunk
-#: (`Chunk.embedding_version`) so a migration to a new embedding model can
-#: find and re-embed only the stale rows instead of guessing from a
-#: timestamp.
+#: Bump when EMBEDDING_MODEL/EMBEDDING_DIMENSION changes in a way that invalidates stored vectors -- lets a migration re-embed only stale rows.
 EMBEDDING_VERSION = "v1"
 EMBEDDING_BATCH_SIZE = 64
 _CORPUS_EXTENSIONS = frozenset({".md", ".txt"})
@@ -75,8 +59,7 @@ async def _ingest_file(
     source = str(path)
     text = await asyncio.to_thread(path.read_text, encoding="utf-8")
 
-    # (content, parent_id) -- every chunk from the same `##` section shares
-    # one `parent_id` (§3.8's "dedupe by parent_id"; see `chunking.py`).
+    # Every chunk from the same ## section shares one parent_id.
     chunks_with_parent: list[tuple[str, uuid.UUID]] = []
     for section in split_into_sections(text):
         parent_id = uuid.uuid4()

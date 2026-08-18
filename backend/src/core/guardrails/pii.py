@@ -1,21 +1,4 @@
-"""PII redaction via Presidio (BLUEPRINT.md §3.12, OWASP LLM02).
-
-Presidio (MIT, independently governed as of mid-2026) is an OPTIONAL
-dependency -- `presidio-analyzer`/`presidio-anonymizer` are NOT in this
-backend's base `dependencies`, only its `guardrails` dependency group
-(`pyproject.toml`) -- offline-first, design principle #4: this template
-boots and its test suite runs with zero guardrail credentials or model
-downloads. Install the group (`uv sync --group guardrails`) before setting
-`GUARDRAILS_ENABLED=true` in any environment that needs real PII
-redaction.
-
-`redact_pii` degrades to a loud no-op (returns the text unchanged, logs at
-error level) rather than crashing a turn if Presidio isn't installed or its
-analysis itself fails -- guardrails are one defense-in-depth layer among
-several here, not the only one (§3.12: "the structlog censor is logs-only
-and is not data protection -- say so loudly" applies just as much to a
-missing optional dependency silently doing nothing).
-"""
+"""Optional dependency (uv sync --group guardrails) -- degrades to a loud no-op (logs error, text unchanged) rather than crashing a turn if Presidio isn't installed or analysis fails."""
 
 from __future__ import annotations
 
@@ -54,7 +37,7 @@ def _load_engines() -> tuple[Any, Any] | None:
             logger.error(
                 "guardrails.presidio_not_installed",
                 hint="GUARDRAILS_ENABLED=true but presidio-analyzer/presidio-anonymizer "
-                "aren't installed -- run `uv sync --group guardrails` (BLUEPRINT.md §3.12). "
+                "aren't installed -- run `uv sync --group guardrails`. "
                 "PII redaction is being skipped until then.",
             )
             _warned_missing = True
@@ -64,8 +47,6 @@ def _load_engines() -> tuple[Any, Any] | None:
 
 
 def redact_pii(text: str) -> str:
-    """Best-effort PII redaction -- returns `text` unchanged if Presidio
-    isn't installed, or its analysis finds nothing to redact."""
     if not text:
         return text
     engines = _load_engines()

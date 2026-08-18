@@ -1,13 +1,4 @@
-"""`PgVectorHybridRetrievalService` -- lexical ⊕ vector, fused with RRF (BLUEPRINT.md §3.3, §3.8).
-
-Two overfetched candidate lists -- Postgres FTS (`content_tsv`, a BM25
-*approximation*) and HNSW vector similarity -- combined with **Reciprocal
-Rank Fusion**, so a query only strong in one signal (an exact SKU/identifier
-match with no semantic neighbors, or vice versa) still surfaces. This is the
-`USE_LOCAL_RETRIEVAL=false` backend; wrap it in `RerankedRetrieval`
-(`modules/retrieval/reranker.py`) for the full production pipeline, or use
-it bare for a cheap hybrid-only setup.
-"""
+"""PgVectorHybridRetrievalService -- fuses lexical (Postgres FTS) and vector (HNSW) candidates via Reciprocal Rank Fusion."""
 
 from __future__ import annotations
 
@@ -21,14 +12,9 @@ from modules.embedding.service import EmbeddingService
 from modules.retrieval.models import Chunk
 from modules.retrieval.protocol import RetrievalDoc
 
-# Reciprocal Rank Fusion's smoothing constant -- the standard value from the
-# original RRF paper (Cormack et al., 2009); large enough that a rank-1 hit
-# in one list doesn't drown out a rank-2/3 hit in the other.
+# RRF's standard smoothing constant (Cormack et al., 2009); large enough that a rank-1 hit doesn't drown out a rank-2/3 hit.
 DEFAULT_RRF_K = 60
-# "Overfetch ~3-5x" per §3.8 -- each candidate list fetches
-# `top_k * overfetch_multiplier` rows before fusion narrows back to `top_k`,
-# so a passage that ranks, say, 15th on vector similarity but 2nd on lexical
-# match still has a chance to fuse into the final top_k.
+# Each list overfetches top_k * multiplier rows before fusion narrows back, so a passage weak in one signal can still fuse in.
 DEFAULT_OVERFETCH_MULTIPLIER = 4.0
 
 
@@ -53,10 +39,7 @@ class PgVectorHybridRetrievalService:
         document_id = _parse_document_id_filter(filters)
         query_embedding = await self._embedding_service.embed_query(text)
 
-        # A short, read-only unit of work of its own -- never the
-        # request-scoped REST session, and never held across an LLM call
-        # (§3.3's transaction rules; this service is called from the `rag`
-        # graph node, not a router).
+        # Short read-only unit of work -- never the request-scoped REST session, never held across an LLM call.
         async with self._sessionmaker() as session:
             await _configure_session(session, filtered=document_id is not None)
             vector_rows = await self._vector_search(
@@ -92,10 +75,7 @@ class PgVectorHybridRetrievalService:
         limit: int,
         document_id: uuid.UUID | None,
     ) -> list[Chunk]:
-        # `plainto_tsquery` (not `websearch_to_tsquery`) to keep the operator
-        # surface minimal and predictable for a template -- swap it (or the
-        # whole FTS half) for `pg_search`/`pg_textsearch` if real BM25 or
-        # richer query syntax matters (§3.3's tsvector caveat).
+        # plainto_tsquery, not websearch_to_tsquery, keeps the operator surface minimal for a template; swap it if real BM25 matters.
         tsquery = sa.func.plainto_tsquery("english", query_text)
         stmt = (
             sa.select(Chunk)
@@ -110,15 +90,7 @@ class PgVectorHybridRetrievalService:
 
 
 async def _configure_session(session: AsyncSession, *, filtered: bool) -> None:
-    """Per-query-session HNSW tuning (§3.3's SQL snippet).
-
-    `SET LOCAL` scopes both GUCs to the current transaction only -- nothing
-    leaks onto a pooled connection's next borrower. `ef_search` trades
-    recall for latency on every HNSW search; `iterative_scan` only matters
-    once a `WHERE` filter is combined with the HNSW `ORDER BY`, where a
-    naive post-filter can silently collapse recall (the exact case this
-    service's `document_id` filter triggers).
-    """
+    """SET LOCAL scopes both GUCs to this transaction; iterative_scan avoids HNSW recall collapsing when combined with a WHERE filter."""
     await session.execute(sa.text("SET LOCAL hnsw.ef_search = 40"))
     if filtered:
         await session.execute(sa.text("SET LOCAL hnsw.iterative_scan = 'relaxed_order'"))
@@ -156,13 +128,7 @@ def _to_retrieval_doc(chunk: Chunk, score: float) -> RetrievalDoc:
         content=chunk.content,
         source=str(source) if source is not None else None,
         score=score,
-        # `score` here is `_reciprocal_rank_fusion`'s output -- a rank-fusion
-        # artifact (max ~`2/(k+1)`, §3.8), not a calibrated relevance signal.
-        # `RerankedRetrieval` overwrites both `score` and this flag once it
-        # actually reranks (`modules/retrieval/reranker.py`); bare/unreranked
-        # results must say so, or `agents/chat/nodes/rag.py`'s abstention
-        # check would compare an RRF-scale score against a reranker-scale
-        # threshold and abstain on every query.
+        # RRF-scale score, not calibrated -- rag.py's abstention check would misfire against a reranker-scale threshold if True.
         score_is_calibrated=False,
         metadata=metadata,
     )

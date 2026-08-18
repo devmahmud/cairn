@@ -1,37 +1,4 @@
-"""`tool` -- a bounded tool-calling loop, hop-capped via `MAX_GRAPH_HOPS` (BLUEPRINT.md §3.6).
-
-`route` sends turns here for the `web_search` intent (per
-`config/behavior/routing.yaml`) -- questions the docs corpus can't answer.
-This template ships no real external tool integration (no API key should be
-required to boot, design principle #4): `web_search` below is a stub that
-explains it isn't configured rather than making a network call, and
-`get_current_date` is a harmless, genuinely useful example of a real local
-tool. Both demonstrate the loop's shape; swap in real tools by passing
-`tools=[...]` to the constructor (the DI-wired instance in
-`agents/chat/graph.py` is the one place that needs to change).
-
-**Idempotency (§3.6's durability contract):** a process crash between a
-tool's side effect landing and the graph's checkpoint write means a resume
-re-executes this *entire node* -- LangGraph checkpoints per node, not per
-tool call within one node. Both bundled tools are naturally idempotent
-(pure functions of their arguments, no external mutation), which is exactly
-what makes that safe here. A tool with a real side effect (a write to a
-third-party API) would need its own idempotency key threaded through the
-call args instead -- don't rely on "the checkpointer already ran this node"
-as the dedup mechanism, because the crash window above is exactly the case
-where it hasn't (see this node's own bounded loop below for where that key
-would be threaded through).
-
-**Streaming (§3.6, §3.7):** the LLM turns that decide *whether* to call a
-tool are forced-tool-bound (`bind_tools`) -- their `on_chat_model_stream`
-chunks carry only tool-call argument deltas, not user-facing text, so this
-node doesn't try to stream those. It does push one `tool_result` event per
-completed call via `get_stream_writer()` so the client can show "ran
-`web_search`" as it happens rather than only after the whole bounded loop
-finishes; the loop's *final* plain-text turn (no more tool calls) still
-auto-streams through `stream_mode="messages"` like `answer.py`'s does, since
-by then the model isn't emitting tool-call chunks.
-"""
+"""tool: bounded, hop-capped tool-calling loop. LangGraph checkpoints per node, not per tool call -- a real side-effecting tool needs its own idempotency key, not "the checkpointer already ran this node" as dedup."""
 
 from __future__ import annotations
 
@@ -71,10 +38,7 @@ def get_current_date() -> str:
 @tool
 def web_search(query: str) -> str:
     """Search the web for current information not covered by the docs corpus."""
-    # A stand-in, not a real integration: this template ships with zero
-    # required external API keys (design principle #4). A real deployment
-    # wires an actual search provider here -- the tool-calling loop below
-    # doesn't change either way.
+    # Stub, not a real integration: this template ships with zero required external API keys.
     return (
         f"Web search is not configured in this deployment (query was: {query!r}). "
         "Tell the user this question needs current information you don't have "
@@ -117,6 +81,7 @@ class ToolAgentNode(GraphNode[ChatState]):
                 messages.append(response)
 
                 if not response.tool_calls:
+                    # No writer call here: this turn auto-streams via stream_mode="messages" like answer.py's node does.
                     text = content_to_text(response.content)
                     return {"messages": [response], "answer": text, "citations": [], "hops": hops}
 
@@ -130,11 +95,7 @@ class ToolAgentNode(GraphNode[ChatState]):
                 for call in response.tool_calls:
                     messages.append(await self._invoke_one(call, writer))
         except Exception:
-            # Fallback ladder (§3.6: "tool-error -> graceful message") --
-            # catches failures outside a single tool call (the LLM call
-            # itself, malformed tool-call arguments the model produced,
-            # ...). A single tool's own failure is handled inside
-            # `_invoke_one` instead, without aborting the loop.
+            # Catches failures outside a single tool call; a tool's own failure is handled inside _invoke_one instead.
             logger.warning("tool.failed_falling_back_to_graceful_message", exc_info=True)
             return _graceful_result(hops, error="tool_error")
 
@@ -157,11 +118,7 @@ class ToolAgentNode(GraphNode[ChatState]):
             )
             return message
         try:
-            # Passing the full `ToolCall` (not just `call["args"]`) makes
-            # `BaseTool.ainvoke` return a ready-made `ToolMessage` stamped
-            # with the matching `tool_call_id` -- see this module's
-            # docstring for the idempotency note that applies here for any
-            # tool with a real side effect.
+            # Passing the full ToolCall, not just call["args"], makes ainvoke return a ready ToolMessage stamped with tool_call_id.
             result = await matched_tool.ainvoke(call)
         except Exception as exc:
             logger.warning("tool.tool_call_failed", tool_name=name, exc_info=True)

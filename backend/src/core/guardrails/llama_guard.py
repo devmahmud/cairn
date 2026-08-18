@@ -1,25 +1,4 @@
-"""Llama Guard -- OPT-IN ONLY, not reachable via `GUARDRAILS_ENABLED` alone (BLUEPRINT.md §3.12).
-
-*** LICENSE CAVEAT -- READ BEFORE ENABLING ***
-Llama Guard ships under Meta's "Llama Community License", which is **not**
-OSI-approved open source: a 700M-monthly-active-users commercial cap beyond
-which Meta's grant of rights expires, a binding Acceptable Use Policy, and
-mandatory "Built with Llama" attribution/naming conditions on any
-derivative -- all of which would transitively bind every client this
-template gets forked into (§3.12's v3 changelog: this is exactly the trap
-that got Llama Guard demoted from the default in the first place). Because
-of that, this function is gated on its own separate flag
-(`GUARDRAILS_LLAMA_GUARD_OPT_IN`, unset by default and independent of
-`GUARDRAILS_ENABLED`) -- `core/guardrails/rails.py`'s default
-`GUARDRAILS_ENABLED=true` path never imports or calls this module, so
-turning guardrails on cannot reach Llama Guard by accident.
-
-If your deployment is already committed to the Llama ecosystem and has
-reviewed the license terms above: call `classify()` from your own fork of
-`core/guardrails/rails.py` in place of (or alongside, as a second,
-non-overlapping guard model -- §3.12's own suggestion for higher-stakes
-deployments) `granite_guardian.classify`.
-"""
+"""OPT-IN ONLY (GUARDRAILS_LLAMA_GUARD_OPT_IN, independent of GUARDRAILS_ENABLED) -- Llama Guard's license is not OSI-approved: a commercial MAU cap, a binding AUP, and mandatory attribution that would bind every client fork."""
 
 from __future__ import annotations
 

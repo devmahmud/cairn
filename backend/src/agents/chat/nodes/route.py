@@ -1,20 +1,4 @@
-"""`route` -- deterministic Python over `routing.yaml` (BLUEPRINT.md §3.6).
-
-No LLM call: given `classify`'s `{intent, confidence}`, look `intent` up in
-`config/behavior/routing.yaml`'s `intents` list (hot-reloaded + runtime-
-overridable, §3.2) and dispatch to its mapped `route`. Below
-`confidence_threshold`, or on no matching intent, fall through to
-`default_route` -- exactly `routing.yaml`'s own header comment, which this
-node is the deterministic implementation of. The conditional edge out of
-`route` (`agents/chat/graph.py`) reads `state["route"]` this node sets.
-
-One override ahead of that lookup, added in §8 step 7: if `input_rail`
-(`agents/chat/nodes/input_rail.py`) blocked this turn (`state["error"] ==
-"input_rail_blocked"`), route straight to `guardrail` regardless of
-whatever `classify` produced on the now-empty input -- `classify` still
-ran (the graph's edges are fixed, §3.6), but its result is meaningless for
-a blocked message and must not be allowed to route around the block.
-"""
+"""If input_rail blocked this turn, route straight to guardrail regardless of classify's result -- classify still ran (fixed edges) but its output is meaningless for a blocked message."""
 
 from __future__ import annotations
 
@@ -25,9 +9,7 @@ from agents.chat.nodes._protocols import BehaviorSource
 from agents.chat.state import ChatState
 from agents.registry import register
 
-#: Must match the branch names `agents/chat/graph.py` wires out of `route`'s
-#: conditional edge -- a `routing.yaml` entry naming anything else falls
-#: back to `default_route` rather than sending the graph to a dead end.
+#: Must match the branch names agents/chat/graph.py wires out of route's conditional edge.
 VALID_ROUTES = frozenset({"answer", "rag", "tool", "guardrail"})
 
 

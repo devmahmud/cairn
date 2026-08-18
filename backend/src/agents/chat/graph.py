@@ -1,35 +1,4 @@
-"""Assembles the chat graph (BLUEPRINT.md §3.6, §8 step 5).
-
-```
-START -> input_rail -> classify -> route -+-> answer     -+
-                                           +-> rag         +-> output_rail -> END
-                                           +-> tool         |
-                                           +-> guardrail   -+
-```
-
-Compiled **with the checkpointer** (`checkpointer=`, §3.3) so every node's
-completion is a durable step (a crash mid-graph resumes from the last
-completed node on the next call with the same `thread_id`, not from turn
-zero). Two more pieces of that durability contract live here, not in any
-one node:
-
-- **`RetryPolicy` on the LLM/tool-calling nodes** (`classify`/`answer`/
-  `rag`/`tool`) -- a different guarantee than checkpoint/resume: "this
-  node's call failed, retry within the same run" vs. "the process died,
-  pick up on the next request" (§3.6). Both matter; neither substitutes for
-  the other.
-- **Per-node `timeout=`** -- a graph-level backstop *above* each node's own
-  per-role timeout (`agents/config.py`'s `RoleConfig.timeout`, enforced by
-  `get_llm()`'s `ChatOpenAI(timeout=...)`). The node's own fallback ladder
-  (§3.6) is expected to catch its role timeout first and degrade
-  gracefully; this outer timeout only fires if that somehow doesn't happen
-  (a hung call the client-side timeout didn't catch, a slow tool loop).
-
-`durability="sync"` and the `TURN_BUDGET_SECONDS` wall-clock budget are
-applied by the caller (`ChatAgent.ainvoke`, `agents/chat/agent.py`), not
-here -- they're properties of *running* the compiled graph, not of its
-structure.
-"""
+"""Assembles the chat graph: input_rail -> classify -> route -> {answer|rag|tool|guardrail} -> output_rail; compiled with the checkpointer so a crash mid-graph resumes from the last completed node, not turn zero."""
 
 from __future__ import annotations
 
@@ -56,12 +25,7 @@ from core.config import Settings, settings
 from core.prompts.engine import PromptEngine
 from modules.retrieval.protocol import RetrievalService
 
-# One retry within the same run, on top of `get_llm()`'s own
-# `max_retries=3` client-side retry (§3.6: a node-level retry and a
-# client-level retry are different layers of the same "transient failure"
-# problem -- the client retry covers one HTTP call, this covers the whole
-# node, including e.g. a structured-output parse failure after a
-# successful call).
+# On top of get_llm()'s own client-side max_retries=3 -- this covers the whole node (e.g. a parse failure after a successful call), not just one HTTP call.
 _LLM_NODE_RETRY_POLICY = RetryPolicy(max_attempts=3)
 
 
@@ -111,11 +75,7 @@ def build_chat_graph(
         "tool",
         ToolAgentNode(llm_factory=llm_factory, max_hops=app_settings.MAX_GRAPH_HOPS),
         retry_policy=_LLM_NODE_RETRY_POLICY,
-        # The tool node's own bounded loop can span several LLM + tool round
-        # trips (up to `MAX_GRAPH_HOPS`); bound it by the same wall-clock
-        # budget the whole turn gets rather than a tighter node-specific
-        # number -- `ChatAgent.ainvoke`'s `TURN_BUDGET_SECONDS` wrapper is
-        # the real backstop either way.
+        # Bound by the turn's own wall-clock budget, not a tighter node-specific number, since the loop can span several hops.
         timeout=app_settings.TURN_BUDGET_SECONDS,
     )
     graph.add_node("guardrail", GuardrailNode(), timeout=5.0)
@@ -142,8 +102,5 @@ def build_chat_graph(
 
 def _select_branch(state: ChatState) -> str:
     route = state.get("route")
-    # `route` (the node) only ever sets one of `VALID_ROUTES` -- this is a
-    # defensive fallback for a state built by hand (a test, a resumed
-    # checkpoint from an older graph version), not a path the graph itself
-    # takes in normal operation.
+    # Defensive fallback for hand-built state (a test, an old checkpoint); the graph itself never takes this path.
     return route if route in VALID_ROUTES else "rag"

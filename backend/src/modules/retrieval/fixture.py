@@ -1,16 +1,4 @@
-"""`LocalFixtureRetrievalService` -- zero-dependency retrieval (BLUEPRINT.md §3.8).
-
-Boots with a small bundled corpus and a deterministic keyword-overlap score
--- no embedding model, no reranker, no Postgres. This is what
-`USE_LOCAL_RETRIEVAL=true` backs (design principle #4: "the app boots and
-tests run with zero credentials"), and what `agents/chat/graph.py`'s offline
-CLI/unit-test path (BLUEPRINT.md §8 step 5's acceptance check) runs the
-`rag` node against.
-
-The bundled passages describe a fictional example product ("Lumen", a notes/
-tasks API) -- purely a stand-in worked example for the docs-assistant, not a
-real product.
-"""
+"""Zero-dependency retrieval backing USE_LOCAL_RETRIEVAL=true -- bundled fixture corpus, deterministic keyword-overlap scoring, no embedding model or Postgres."""
 
 from __future__ import annotations
 
@@ -21,12 +9,7 @@ from modules.retrieval.protocol import RetrievalDoc
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
-# A small, deliberately short stopword list -- just enough that "what is
-# the airspeed velocity of an unladen swallow" doesn't spuriously overlap
-# with every passage on "is"/"the"/"of"/"a". Real retrieval (pgvector
-# hybrid + rerank, `modules/retrieval/pgvector.py`/`reranker.py`) doesn't
-# need this at all: Postgres FTS already strips stopwords, and a
-# cross-encoder reranker never does raw keyword overlap in the first place.
+# Just enough to stop trivial words like "the"/"is" from spuriously overlapping every passage; real retrieval (FTS + reranker) doesn't need this.
 _STOPWORDS = frozenset(
     {
         "a",
@@ -143,14 +126,7 @@ _FIXTURE_PASSAGES: tuple[_FixturePassage, ...] = (
 
 
 class LocalFixtureRetrievalService:
-    """Zero-dep `RetrievalService` (§3.8) over a small bundled fixture corpus.
-
-    Scoring is a deterministic keyword-overlap ratio -- good enough to
-    exercise the `rag` node's grounding/citation/abstention logic offline,
-    not a stand-in for real relevance ranking. Real deployments use
-    `build_retrieval_service(use_local=False, ...)` instead
-    (`modules/retrieval/factory.py`).
-    """
+    """Keyword-overlap ratio scoring -- good enough to exercise rag-node logic offline, not real relevance ranking."""
 
     async def query(
         self, text: str, top_k: int, filters: dict[str, object] | None = None

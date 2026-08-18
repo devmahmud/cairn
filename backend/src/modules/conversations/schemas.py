@@ -1,8 +1,4 @@
-"""Pydantic request/response schemas for the conversations module (BLUEPRINT.md §3.3).
-
-Plain `response_model`s, no global envelope (§3.9) -- OpenAPI stays
-truthful, which is what full typed-client codegen (§4.3) needs.
-"""
+"""Plain response_models, no global envelope -- OpenAPI stays truthful, which typed-client codegen needs."""
 
 from __future__ import annotations
 

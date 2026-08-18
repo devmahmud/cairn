@@ -1,21 +1,4 @@
-"""Input guardrail hook -- real rails, no-op unless `GUARDRAILS_ENABLED` (BLUEPRINT.md §3.6, §3.12).
-
-Delegates to `core/guardrails/rails.py::input_rail` -- the deterministic
-denylist, PII redaction, and (if `GUARDIAN_MODEL_BASE_URL` is set) Granite
-Guardian classification described there. This node's own job is just
-threading graph state through that call and reacting to its verdict.
-
-**Not a graph rewire** (per this file's own prior-step docstring, preserved
-here): `START -> input_rail -> classify -> route -> ...` is a fixed edge
-set, so a blocked input can't short-circuit straight to `guardrail` from
-here. Instead: a block clears `state["input"]` (nothing raw/unsafe should
-reach `classify`/`answer`/`rag` even as a fallback) and sets
-`state["error"] = "input_rail_blocked"`, which `route.py` checks *before*
-its normal `routing.yaml` lookup and sends to the `guardrail` branch. The
-one real cost of this shape: `classify` still runs once, on an empty
-question, before `route` redirects -- a documented tradeoff (a wasted,
-harmless LLM call) rather than a graph restructure.
-"""
+"""A block doesn't short-circuit the graph -- it clears input and sets error="input_rail_blocked", which route.py redirects to guardrail; classify still runs once on the empty input (documented, harmless)."""
 
 from __future__ import annotations
 

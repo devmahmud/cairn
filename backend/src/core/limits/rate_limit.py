@@ -1,22 +1,4 @@
-"""`slowapi` per-user/IP rate limit on `/chat` (BLUEPRINT.md §3.10, §3.13).
-
-`RATE_LIMIT_PER_MIN=0` (the local-dev default) turns this off entirely --
-`chat_rate_limit` below is a plain pass-through decorator in that case, so
-`modules/chat/router.py` always applies the *same* decorator name
-regardless of whether limiting is active. This mirrors
-`core/security/current_user.py`'s `AUTH_ENABLED` branch: decide once, at
-import time, from a tier-1 static `Settings` value (§3.2: boot-time,
-immutable for the process's life), rather than special-casing every call
-site.
-
-Keyed by the caller's identity when it can be read cheaply, IP otherwise:
-`_rate_limit_key` decodes the bearer JWT's `sub` claim **without verifying
-the signature or expiry** -- this is a bucketing key for rate limiting, not
-an authentication decision (that already happens, separately, in
-`core.security.current_user.get_current_user_id`), so a forged/garbage
-token just falls back to IP-keyed limiting rather than being trusted for
-anything.
-"""
+"""Decodes the bearer JWT's sub claim WITHOUT verifying signature/expiry -- a rate-limit bucketing key only, not an auth decision (that happens separately in get_current_user_id); a forged token just falls back to IP-keyed limiting."""
 
 from __future__ import annotations
 

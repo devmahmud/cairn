@@ -1,20 +1,4 @@
-"""Liveness + readiness probes (BLUEPRINT.md §3.9, §8 step 2).
-
-`/health/live` is a static 200 -- "is the process up," nothing more. It must
-never depend on the DB/Redis/LLM, or a downstream outage takes the pod out
-of rotation for a reason that has nothing to do with whether the process
-itself is alive.
-
-`/health/ready` checks the dependencies this app actually needs to serve a
-request right now: Postgres always, Redis only when `REDIS_URL` is set
-(`REDIS_URL=""` is a supported, offline-first mode -- §3.2). It deliberately
-does **not** call the LLM: that's a network round-trip to a third party on
-every readiness probe (orchestrators commonly poll this every few seconds),
-which is slow, can rate-limit or cost money, and "is the LLM provider
-reachable this instant" isn't what "is this pod ready to accept traffic"
-should mean -- a per-request timeout/retry already covers an LLM outage
-without coupling it to the probe loop.
-"""
+"""/health/ready deliberately doesn't call the LLM -- a per-request timeout/retry already covers an outage without coupling it to the probe loop."""
 
 from __future__ import annotations
 

@@ -1,10 +1,4 @@
-"""File-system Jinja2 prompt-template loader (BLUEPRINT.md §3.5, §2).
-
-Loads `.j2` files from `config/prompts/` (BLUEPRINT.md §2). This is the
-file-only half of the two-tier resolution `PromptEngine` (`engine.py`)
-performs -- the Langfuse-by-label branch builds on top of this loader
-without changing its interface, and falls back to it on a miss/outage.
-"""
+"""Loads .j2 files from config/prompts/ -- the file-only half of PromptEngine's two-tier resolution; Langfuse falls back to this on a miss/outage."""
 
 from __future__ import annotations
 
@@ -27,23 +21,13 @@ class FileSystemJ2Loader:
             autoescape=False,
             trim_blocks=True,
             lstrip_blocks=True,
-            # Explicit invalidation via `reload()` (driven by
-            # `core/prompts/watcher.py`'s `watchfiles` watch, §3.2 tier 3)
-            # rather than Jinja's own per-`get_template()` mtime check --
-            # one observable, testable reload path instead of two competing
-            # ones, matching this codebase's preference for explicit over
-            # implicit (§3.3: "no generic filter DSL").
+            # Explicit invalidation via reload() (driven by watcher.py), not Jinja's own mtime check -- one reload path, not two competing ones.
             auto_reload=False,
             cache_size=-1,
         )
 
     def render(self, name: str, **context: object) -> str:
-        """Render `<base_path>/<name>` with `context`.
-
-        `name` should include the `.j2` extension (e.g. `"chat/answer.j2"`)
-        -- explicit over implicit, matching this template's stance against
-        magic elsewhere (§3.3's "no generic filter DSL").
-        """
+        """name should include the .j2 extension (e.g. "chat/answer.j2")."""
         try:
             template = self._env.get_template(name)
         except TemplateNotFound as exc:
@@ -53,10 +37,5 @@ class FileSystemJ2Loader:
         return template.render(**context)
 
     def reload(self) -> None:
-        """Drop every cached/compiled template so the next `render()` re-reads from disk.
-
-        Wired as the `on_change` callback the `watchfiles`-driven background
-        watcher calls whenever a file under `base_path` changes (§3.2 tier
-        3) -- see `core/prompts/watcher.py` and `main.py`'s lifespan.
-        """
+        """Called by watcher.py's on_change callback whenever a file under base_path changes."""
         self._env = self._build_env()

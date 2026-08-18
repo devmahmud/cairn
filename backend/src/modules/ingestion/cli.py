@@ -1,19 +1,4 @@
-"""CLI entrypoint for `make ingest` (BLUEPRINT.md §3.8, §8 step 5).
-
-    PYTHONPATH=src uv run python -m modules.ingestion.cli [directory]
-
-(exactly what the Makefile's `ingest` target runs, `src/` as the import
-root -- same convention `fastapi dev src/main.py` and pytest's
-`pythonpath = ["src"]` already use, §8 step 2.) Defaults to
-`backend/data/sample_corpus/`, the docs-assistant example's corpus.
-
-This is the one piece of the RAG pipeline that's inherently online-only --
-you can't chunk-and-embed a corpus with zero external dependencies, so it
-needs a real Postgres and an embeddings endpoint reachable at
-`OPENAI_BASE_URL`. That doesn't compromise the rest of the app's
-offline-first stance (design principle #4): `USE_LOCAL_RETRIEVAL=true` is
-what keeps *querying* (not ingesting) credential-free.
-"""
+"""The one online-only piece of the RAG pipeline -- needs real Postgres + an embeddings endpoint; USE_LOCAL_RETRIEVAL=true is what keeps querying (not ingesting) credential-free."""
 
 from __future__ import annotations
 

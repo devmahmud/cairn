@@ -1,14 +1,4 @@
-"""`classify` -- one forced-tool call producing `{intent, confidence}` (BLUEPRINT.md §3.6).
-
-Intent *names* come from `config/behavior/routing.yaml` (hot-reloaded +
-runtime-overridable, §3.2) so the prompt always lists exactly the intents
-`route` (`route.py`) knows how to dispatch -- adding an intent to the YAML
-doesn't need a code change here. `route`, not this node, applies
-`routing.yaml`'s `confidence_threshold` (§3.6: "route -- deterministic
-Python over `routing.yaml`"); this node's own fallback ladder only covers
-*failure* to classify at all (timeout, provider error, malformed structured
-output), not a low-but-valid confidence score.
-"""
+"""One forced-tool call producing {intent, confidence}; route.py (not this node) applies routing.yaml's confidence_threshold."""
 
 from __future__ import annotations
 
@@ -63,11 +53,7 @@ class ClassifyNode(GraphNode[ChatState]):
             )
             result = await structured_llm.ainvoke(prompt)
         except Exception:
-            # Fallback ladder (§3.6: "classify timeout -> unclear"), widened
-            # to any classify-time failure -- a timeout, a provider error, a
-            # hot-reloaded `routing.yaml` that's momentarily unparseable --
-            # all degrade to the same safe `unclear` rather than failing the
-            # turn outright.
+            # Any classify-time failure (timeout, provider error, a momentarily-unparseable routing.yaml) degrades to "unclear", not a failed turn.
             logger.warning("classify.failed_falling_back_to_unclear", exc_info=True)
             return _fallback_result()
 
@@ -86,11 +72,7 @@ def _structured_output_method() -> Literal["json_schema", "json_mode", "function
     mode = settings.STRUCTURED_OUTPUT_MODE
     if mode in _STRUCTURED_OUTPUT_METHODS:
         return cast(Literal["json_schema", "json_mode", "function_calling"], mode)
-    # `"guided_json"` (vLLM grammar-constrained decoding, §3.6) isn't a
-    # `with_structured_output(method=...)` value -- it's provider-specific
-    # request kwargs, a different mechanism than this switch. Fall back to
-    # the most broadly cross-provider-supported method rather than passing
-    # an invalid literal through to the client.
+    # "guided_json" (vLLM grammar-constrained decoding) is provider-specific request kwargs, not a with_structured_output method.
     logger.warning(
         "classify.unsupported_structured_output_mode_falling_back",
         configured=mode,

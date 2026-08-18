@@ -1,10 +1,4 @@
-"""FastAPI application entrypoint (BLUEPRINT.md §3.9, §8 step 2).
-
-Run via `fastapi dev src/main.py` (local -- see the Makefile's `run` target)
-or `uvicorn main:app --app-dir src` (Docker, see `Dockerfile`); both resolve
-`src/` as the import root, so first-party modules import as `core.config`,
-not `src.core.config`.
-"""
+"""FastAPI entrypoint; run with src/ as the import root, so modules import as core.config, not src.core.config."""
 
 from __future__ import annotations
 
@@ -34,23 +28,14 @@ from routers import api_router
 configure_logging(json_logs=settings.ENVIRONMENT != "local")
 logger = structlog.get_logger(__name__)
 
-# The composition root's one shared instance (§3.4, `core/di/container.py`)
-# -- `dependency-injector` providers are lazy, so importing it here doesn't
-# touch the network by itself; `modules/chat/router.py` imports this same
-# object (not a second `Container()`) so both see the one checkpointer pool
-# this lifespan actually opens below.
+# Lazy DI providers: importing container here doesn't touch the network; router.py imports this same instance, not a second Container().
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("app.startup", environment=settings.ENVIRONMENT)
 
-    # Tier 3 of the config system (§3.2): `config/prompts/*.j2` and
-    # `config/behavior/*.yaml` are watched by `watchfiles` in *every*
-    # environment (not just local) -- editing a prompt or a routing table
-    # takes effect on the next request, no rebuild. Cancelling these tasks
-    # on shutdown stops each `watchfiles.awatch` loop cleanly (see
-    # `core/prompts/watcher.py`).
+    # Tier 3 config: prompts/behavior files are watched in every environment, not just local -- edits apply on the next request.
     hot_reload_tasks = [
         asyncio.create_task(
             watch_and_reload(f"{settings.CONFIG_DIR}/prompts", container.loader().reload)
@@ -60,14 +45,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ),
     ]
 
-    # LangGraph's `AsyncPostgresSaver` owns and migrates its own checkpoint
-    # tables at startup (BLUEPRINT.md §3.3) -- deliberately NOT via Alembic,
-    # so it can never race or duplicate the app's own migrations. The pool
-    # is built `open=False` (§8 step 5, `core/db/checkpointer.py`) so
-    # resolving the DI container's providers never touches the network by
-    # itself; opening it and running `.setup()` (idempotent -- creates the
-    # checkpoint tables on first run, no-ops after) belongs here, the one
-    # place that represents "the app is actually starting up".
+    # AsyncPostgresSaver owns and migrates its own tables, deliberately not via Alembic, so it can never race the app's own migrations.
     checkpointer_pool = container.checkpointer_pool()
     await checkpointer_pool.open()
     await container.checkpointer().setup()
@@ -80,8 +58,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await checkpointer_pool.close()
     await engine.dispose()
-    # `None` whenever `REDIS_URL` is unset (§3.7, `core/stream/resume.py`) --
-    # nothing to close in the offline-first default case.
+    # None whenever REDIS_URL is unset -- nothing to close in that case.
     redis_client = container.redis_client()
     if redis_client is not None:
         await redis_client.aclose()
@@ -95,16 +72,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Explicit allow-list, never "*" with credentials (BLUEPRINT.md §3.9).
-# `CORS_ALLOW_ORIGINS` already defaults to a concrete origin, not a
-# wildcard -- this is a hard fail-fast backstop against a misconfigured
-# `.env`, not the primary defense.
+# Fail-fast backstop: never allow "*" with credentials enabled.
 if "*" in settings.cors_allow_origins_list:
     raise RuntimeError(
         "CORS_ALLOW_ORIGINS must not contain '*': this app allows "
         "credentialed cross-origin requests, and pairing that with a "
         "wildcard origin is both rejected by browsers and an open CORS "
-        "misconfiguration (BLUEPRINT.md §3.9)."
+        "misconfiguration."
     )
 
 app.add_middleware(
@@ -115,19 +89,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pure-ASGI, not `BaseHTTPMiddleware` -- see the module docstring in
-# `core/middleware/request_id.py` for why that distinction matters here.
+# Pure-ASGI, not BaseHTTPMiddleware -- see core/middleware/request_id.py for why.
 app.add_middleware(RequestIDMiddleware)
 
-# `slowapi` per-user/IP rate limiting (§3.10, §3.13) -- a no-op-in-effect
-# `Limiter` (its own `RATE_LIMIT_PER_MIN=0`-gated decorator) when limiting
-# is off, so this wiring is unconditional; only `modules/chat/router.py`'s
-# `@chat_rate_limit` decorator on `/chat` actually enforces anything.
+# No-op unless RATE_LIMIT_PER_MIN is set; only modules/chat/router.py's @chat_rate_limit decorator actually enforces anything.
 app.state.limiter = limiter
-# `slowapi`'s handler is typed narrowly (`RateLimitExceeded`, not the
-# `Exception` base `add_exception_handler` expects) -- a real, common
-# variance mismatch between slowapi and Starlette's typed exception-handler
-# signature, not a bug here.
+# slowapi's handler is typed narrower (RateLimitExceeded) than add_exception_handler expects -- a real variance mismatch, not a bug here.
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 app.add_middleware(SlowAPIMiddleware)
 
@@ -137,8 +104,5 @@ Instrumentator().instrument(app).expose(app, include_in_schema=False)
 
 app.include_router(api_router)
 
-# Merges `ChatSSEEvent`'s discriminated union into `/openapi.json` -- SSE
-# responses bypass `response_model`, so nothing about it would otherwise
-# reach the schema `openapi-typescript` (§4.3) generates the frontend's SSE
-# dispatch types from.
+# SSE responses bypass response_model, so this merges ChatSSEEvent's union into /openapi.json for the frontend's generated types.
 register_sse_schema(app)

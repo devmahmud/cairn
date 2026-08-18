@@ -1,36 +1,4 @@
-"""`ChatStreamer` -- translates the chat graph's stream into SSE (BLUEPRINT.md §3.6, §3.7, §8 step 6).
-
-The one place graph events (`agents/chat/agent.py::ChatAgent.astream`, itself
-`agents/chat/graph.py`'s `graph.astream(stream_mode=[...])`) become
-`modules/chat/sse.py::ChatSSEEvent`s -- the graph itself emits no SSE (§3.1).
-
-**Transaction discipline (§3.3, the "v1 gap"):** no request-scoped session is
-held across a turn. `ChatStreamer` is handed the raw `async_sessionmaker`
-(not `core.db.engine.get_session`) and opens exactly two short transactions
-per turn, both via `_unit_of_work` below:
-1. `begin_turn` -- validate the conversation is owned by this user and
-   idempotently insert the user's message (`MessageRepository.create_idempotent`,
-   reused as-is from `modules/conversations/repository.py` -- same table,
-   same dedup rule, no reason for a second implementation). Runs as a FastAPI
-   *dependency* (`modules/chat/router.py`), not inside the SSE generator
-   itself, specifically so a bad `conversation_id` still comes back as a
-   normal `404` -- once the streaming response begins, raising doesn't
-   produce an HTTP error status anymore (§3.7).
-2. `_persist_reply` -- insert the assistant's final message, after the graph
-   run (and the LLM call within it) has fully finished. Neither transaction
-   is ever open while `ChatAgent.astream` is being awaited/iterated.
-
-**Two producer shapes, one core generator (`_run_turn`):**
-- **Simple mode** (`stream_turn_simple`) -- the producer runs in-request;
-  `modules/chat/router.py`'s endpoint yields its `ServerSentEvent`s straight
-  into FastAPI's native `EventSourceResponse`.
-- **Durable mode** (`run_durable_producer`, `STREAM_DURABLE=true` +
-  `REDIS_URL`) -- the same `_run_turn` output is instead published to
-  `core/stream/resume.py`'s `RedisStreamBus`, decoupled from the request
-  that started it; `GET /chat/stream/{stream_id}` tails it independently.
-`durable_enabled` is what `router.py` checks to pick a mode, degrading to
-simple mode when Redis isn't configured (§3.7: "not error").
-"""
+"""Translates the chat graph's stream into SSE; two short transactions per turn, no session held across the LLM call."""
 
 from __future__ import annotations
 
@@ -72,42 +40,15 @@ logger = structlog.get_logger(__name__)
 
 _GENERIC_ERROR_MESSAGE = "Sorry, something went wrong generating a reply. Please try again."
 
-#: Nodes whose `stream_mode="messages"` chunks are safe to surface as
-#: `message_delta` text (§3.6's "plain-text node" case, plus `tool`'s own
-#: final non-tool-call turn -- see `agents/chat/nodes/tool.py`'s docstring).
-#: `rag` deliberately isn't here: it streams via a custom writer instead
-#: (`_CUSTOM_WRITER_NODES`), and would otherwise double-emit its text.
+# rag streams via a custom writer instead; including it here would double-emit its text.
 _MESSAGES_MODE_NODES = frozenset({"answer", "tool"})
 
-#: Nodes that push text through `get_stream_writer()` instead of relying on
-#: LangGraph's auto-streamed model events (§3.6, §3.7).
 _CUSTOM_WRITER_NODES = frozenset({"rag"})
 
-#: `state["error"]` codes `agents/chat/nodes/input_rail.py`/`output_rail.py`
-#: set when `core/guardrails/` actually blocked something (§3.12) --
-#: distinguishes a real block from the plain `unclear`-intent case, both of
-#: which route through the same `guardrail` node.
+# Distinguishes an actual guardrail block from the plain "unclear intent" case; both route through the same guardrail node.
 _GUARDRAIL_BLOCKED_ERRORS = frozenset({"input_rail_blocked", "output_rail_blocked"})
 
-#: Per-`(conversation_id, idempotency_key)` turn-completion signal (§3.3's
-#: "a retry never re-runs the graph" guarantee). `begin_turn` claims one the
-#: moment it inserts a genuinely new turn's user message, and `_run_turn`
-#: releases it -- however the turn ends -- once there's something to replay
-#: (or definitively nothing, on an unhandled failure). A retry that arrives
-#: while the original attempt is still generating (no assistant reply
-#: persisted yet, so `_existing_reply` alone can't tell "still running" from
-#: "never happened") waits on this instead of independently re-running the
-#: whole graph -- the common case this closes is a client re-POSTing
-#: because the SSE response looked hung while the server was still
-#: streaming.
-#:
-#: Process-local by design, same reasoning as `_DURABLE_PRODUCER_TASKS`
-#: below: a retry that lands on a *different* replica in a multi-process
-#: deployment finds no local marker and falls through to re-running the
-#: graph, same as before this fix. Closing that cross-replica window needs a
-#: distributed lock (a Postgres advisory lock, or a Redis-backed one) --
-#: out of scope here; this fixes the single-process race, which is what a
-#: client retrying against one backend instance actually hits.
+# Process-local retry lock for concurrent duplicate turns; doesn't cover cross-replica races (needs a distributed lock for that).
 _INFLIGHT_TURNS: dict[tuple[UUID, str], asyncio.Event] = {}
 
 
@@ -115,8 +56,7 @@ _INFLIGHT_TURNS: dict[tuple[UUID, str], asyncio.Event] = {}
 async def _unit_of_work(
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[AsyncSession]:
-    """One short, explicit transaction -- the same contract as
-    `core.db.engine.get_session`, usable outside FastAPI's `Depends` (§3.3)."""
+    """Same contract as core.db.engine.get_session, usable outside FastAPI's Depends."""
     async with sessionmaker() as session:
         try:
             yield session
@@ -128,30 +68,7 @@ async def _unit_of_work(
 
 @dataclass(slots=True)
 class TurnContext:
-    """What `ChatStreamer.begin_turn` hands off to the actual streaming step.
-
-    `replay` is set when this turn's `idempotency_key` was already used
-    (a retried/reconnected `POST /chat`, §3.3): the assistant's reply from
-    the original attempt, if the turn had already finished, so a retry never
-    re-runs the graph (and never double-fires an LLM call, however
-    idempotent the rest of the turn is) -- it just re-plays the same result.
-    `None` means either no key was given, this is genuinely the first
-    attempt, or (bounded by `TURN_BUDGET_SECONDS`) a concurrent original
-    attempt never finished within `begin_turn`'s wait -- see
-    `_INFLIGHT_TURNS`'s docstring.
-
-    `user_message_id` is the persisted user `Message` row's own id --
-    distinct from `message_id` (this turn's *assistant* reply id, freshly
-    minted here even on a replay). `_persist_reply` stamps it onto the
-    assistant reply's `reply_to_message_id` so a later retry can look its
-    answer up directly (`MessageRepository.get_reply_to`) instead of
-    guessing from conversation recency.
-
-    `inflight_key` is set only when this turn just claimed the in-flight
-    marker for its `(conversation_id, idempotency_key)` (i.e. it's a
-    genuinely new turn with an idempotency key, not a replay) -- `None`
-    means there's nothing for `_run_turn` to release.
-    """
+    """Handoff from begin_turn to the streaming step; replay carries a prior turn's reply so retries don't re-run the graph."""
 
     conversation_id: UUID
     user_id: UUID
@@ -178,13 +95,6 @@ class ChatStreamer:
 
     @property
     def durable_enabled(self) -> bool:
-        """§3.7: durable mode needs both the flag and a configured Redis bus.
-
-        `self._stream_bus` is already `None` whenever `REDIS_URL` is unset
-        (`core/stream/resume.py::build_stream_bus`) -- so this alone
-        implements "if `REDIS_URL` is unset, fall back to simple mode, not
-        error."
-        """
         return self._settings.STREAM_DURABLE and self._stream_bus is not None
 
     @property
@@ -210,19 +120,7 @@ class ChatStreamer:
                 conversation_id=conversation_id,
                 role="user",
                 content=text,
-                # Explicit `[]`, not omitted: a transient (never-flushed)
-                # `Message` leaves these Python-`None` until the DB's
-                # `server_default` applies at flush -- fine for `add()`, but
-                # `create_idempotent`'s manual `INSERT ... VALUES` (below)
-                # reads these attributes *before* any flush, so a `None`
-                # here would be sent as a literal `NULL`. `Message.artifacts`/
-                # `.citations` are JSONB, not `none_as_null`, so SQLAlchemy
-                # serializes that `None` as the JSON literal `null` -- valid
-                # against the column's `NOT NULL` constraint (it isn't SQL
-                # NULL), but not a `list`, so `MessageRead` rejects it on
-                # the next read. `modules/conversations/service.py::add_message`
-                # never hits this because `MessageCreate`'s Pydantic defaults
-                # already fill in `[]` before it ever builds a `Message`.
+                # Explicit [], not None: create_idempotent's raw INSERT would serialize None as JSON null, failing MessageRead's list validation.
                 artifacts=[],
                 citations=[],
                 idempotency_key=idempotency_key,
@@ -233,10 +131,7 @@ class ChatStreamer:
             if not created:
                 replay = await self._existing_reply(messages, inserted_user_message.id)
 
-        # Everything past this point runs *outside* the transaction above --
-        # §3.3's session discipline applies to the in-flight wait below just
-        # as much as it does to the LLM call itself: never hold a session
-        # open across something that can take turn-length time.
+        # Below runs outside the transaction above -- never hold a session open across turn-length work.
         inflight_key: tuple[UUID, str] | None = None
         if idempotency_key is not None:
             key = (conversation_id, idempotency_key)
@@ -265,18 +160,7 @@ class ChatStreamer:
     async def _await_inflight_then_recheck(
         self, key: tuple[UUID, str], *, user_message_id: UUID
     ) -> Message | None:
-        """A retry found its own user message already inserted, but no reply
-        for it yet -- either the original attempt is still generating (in
-        this same process), it finished and this lookup just raced its
-        commit, or it's running on a different process/replica entirely (no
-        local marker to wait on -- `_INFLIGHT_TURNS`'s docstring on that
-        limitation).
-
-        Waits on the local in-flight signal, bounded by `TURN_BUDGET_SECONDS`
-        (the same ceiling the turn itself runs under -- if the original truly
-        died without ever releasing it, this doesn't hang forever), then
-        re-checks for a persisted reply in a fresh, short transaction.
-        """
+        # Bounded by TURN_BUDGET_SECONDS so a dead original attempt that never released the marker doesn't hang this one forever.
         event = _INFLIGHT_TURNS.get(key)
         if event is not None:
             with contextlib.suppress(TimeoutError):
@@ -295,16 +179,7 @@ class ChatStreamer:
     # --- Durable mode ----------------------------------------------------------
 
     async def run_durable_producer(self, *, stream_id: str, turn: TurnContext) -> None:
-        """Run the turn to completion, publishing every event to Redis.
-
-        Decoupled from the request that started it (`modules/chat/router.py`
-        runs this as a background `asyncio.Task`, not awaited inline) -- it
-        keeps running (and keeps writing durable frames a reconnecting client
-        can replay) even if the original HTTP request disconnects. Always
-        publishes the end-of-stream sentinel, however the turn finished
-        (success, mid-turn error, or a `/stop`-requested/task-cancelled
-        early exit), so every tailer reliably stops waiting.
-        """
+        """Runs independently of the originating request; always publishes the end-of-stream sentinel so tailers stop waiting."""
         assert self._stream_bus is not None
         formatter = SSEEventFormatter()
         try:
@@ -343,12 +218,7 @@ class ChatStreamer:
             async for event in self._generate_and_persist(turn, stream_id=stream_id):
                 yield event
         finally:
-            # Release the in-flight marker *after* this generator is fully
-            # done producing events (normal completion, an early `return` in
-            # either `except` block below, or the consumer closing it early,
-            # e.g. `run_durable_producer` breaking on a stop request) --
-            # whichever way this turn ends, a concurrent retry waiting in
-            # `_await_inflight_then_recheck` above needs to stop waiting.
+            # Release only once this generator is fully done, so a waiting retry (_await_inflight_then_recheck) stops waiting.
             if turn.inflight_key is not None:
                 inflight_event = _INFLIGHT_TURNS.pop(turn.inflight_key, None)
                 if inflight_event is not None:
@@ -362,13 +232,7 @@ class ChatStreamer:
         )
         final_state: dict[str, Any] = {}
         try:
-            # `asyncio.Semaphore`-backed concurrency cap (§3.10, §3.13) --
-            # bounds how many turns are mid-generation (the actual LLM/graph
-            # work) at once, process-wide. Held for exactly this loop, the
-            # one piece of `_run_turn` both simple- and durable-mode share
-            # (this method's own docstring) -- not around persistence
-            # (`_persist_reply`, below) or SSE tailing, neither of which is
-            # "a generation".
+            # Covers only the graph run itself, not persistence or SSE tailing below.
             async with limit_concurrent_generations():
                 async for mode, payload in self._chat_agent.astream(
                     conversation_id=turn.conversation_id, user_id=turn.user_id, text=turn.text
@@ -397,11 +261,7 @@ class ChatStreamer:
         try:
             await self._persist_reply(turn, final_state)
         except Exception:
-            # The client already has the full reply via SSE (every event
-            # above this point already streamed) -- a persistence failure
-            # here is a durability problem to alert on (structlog), not one
-            # that should retroactively surface as a stream error after
-            # `message_end` already went out.
+            # Client already received the full reply via SSE; a persist failure here is a durability issue to alert on, not a stream error.
             logger.exception(
                 "chat_stream.persist_reply_failed", conversation_id=str(turn.conversation_id)
             )
@@ -425,39 +285,22 @@ class ChatStreamer:
                 )
             )
 
-    # --- Durable-mode stream ownership (§3.9's ownership-check principle) ----
+    # --- Durable-mode stream ownership --------------------------------------
 
     async def record_stream_owner(self, *, stream_id: str, user_id: UUID) -> None:
-        """Bind a just-spawned durable stream to the user who started it.
-
-        Called synchronously from `modules/chat/router.py::_start_chat_turn`
-        before the response (carrying `X-Stream-Id`) is returned -- so
-        there's no window where a client could already have the `stream_id`
-        but the ownership record doesn't exist yet.
-        """
+        """Called before the response carrying X-Stream-Id returns, so no window exists where the id exists without an owner record."""
         assert self._stream_bus is not None
         await self._stream_bus.record_owner(stream_id, str(user_id))
 
     async def is_stream_owner(self, *, stream_id: str, user_id: UUID) -> bool:
-        """`True` unless the stream has a *different* recorded owner --
-        i.e. fails open on "no owner on record" (unknown/expired stream_id)
-        rather than turning a TTL expiry into a spurious rejection for the
-        stream's own rightful owner. Callers (`resume_chat_stream`/
-        `stop_chat_stream`) already have their own "stream not found"
-        handling for the unknown case."""
+        """Fails open (True) when there's no owner on record, rather than turning a TTL expiry into a false rejection."""
         assert self._stream_bus is not None
         owner = await self._stream_bus.get_owner(stream_id)
         return owner is None or owner == str(user_id)
 
 
 def _replay_events(message: Message, *, message_id: UUID) -> list[ChatSSEEvent]:
-    """The SSE sequence for a retried turn whose reply already exists (§3.3).
-
-    Uses the *original* reply's own id (not this retry's `message_id`) --
-    the client already has (or will fetch via REST) that message row; this
-    just replays its content as a completed stream instead of re-running
-    the graph.
-    """
+    """Replays a prior turn's persisted reply under its own message id, not this retry's."""
     events: list[ChatSSEEvent] = [
         MessageStartEvent(message_id=str(message.id), conversation_id=str(message.conversation_id))
     ]
@@ -472,14 +315,7 @@ def _replay_events(message: Message, *, message_id: UUID) -> list[ChatSSEEvent]:
     return events
 
 
-#: Background producer tasks for durable-mode turns, keyed by `stream_id`
-#: (§3.7). Process-local by design -- `chat_streamer` is a DI `Factory`
-#: (§3.4), so a per-instance registry wouldn't be shared between the request
-#: that spawns a producer and a later request that stops it; module-level
-#: state is what makes both see the same task. This is the immediate-effect,
-#: same-process half of stopping a stream -- `RedisStreamBus.request_stop`
-#: (`core/stream/resume.py`) is the cross-process-safe, best-effort half a
-#: tailer honors regardless of which process the producer is actually on.
+# Module-level, not instance state: chat_streamer is a per-request DI factory, but spawn/cancel must share one process-global map.
 _DURABLE_PRODUCER_TASKS: dict[str, asyncio.Task[None]] = {}
 
 
@@ -499,10 +335,7 @@ def cancel_durable_producer(stream_id: str) -> bool:
 
 
 def _content_to_text(content: Any) -> str:
-    """Normalize a `BaseMessageChunk.content` (str, or a list of content
-    blocks) to `str` -- the same normalization `agents/chat/nodes/_util.py`
-    applies, kept as its own copy here since that module is private to
-    `agents/chat/nodes/` (see its own docstring)."""
+    """Duplicated from agents/chat/nodes/_util.py, which is private to that package."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -515,12 +348,7 @@ def _content_to_text(content: Any) -> str:
 
 
 class _EventTranslator:
-    """Turns one turn's `(stream_mode, payload)` tuples into `ChatSSEEvent`s.
-
-    Stateful per turn (tracks which branch node is currently "the" message
-    being produced, and whether it's already streamed any delta text) --
-    always construct a fresh instance per `_run_turn` call.
-    """
+    """Stateful per turn -- construct fresh per _run_turn call."""
 
     def __init__(self, *, conversation_id: UUID, message_id: UUID, stream_id: str | None) -> None:
         self._conversation_id = str(conversation_id)
@@ -575,8 +403,6 @@ class _EventTranslator:
             ]
 
         if node_name not in VALID_ROUTES or node_name != self._current_node:
-            # `input_rail`/`output_rail` (no-ops today, §8 step 7), or an
-            # update for a node that isn't this turn's active branch.
             return []
 
         return self._handle_branch_completion(node_name, update)
@@ -587,11 +413,7 @@ class _EventTranslator:
         events: list[ChatSSEEvent] = []
 
         if node_name == "guardrail":
-            # `"refuse"` when `input_rail`/`output_rail` actually blocked
-            # something (`core/guardrails/`, §3.12); `"clarify"` for the
-            # plain low-confidence/`unclear`-intent case -- both still land
-            # on this same node (`agents/chat/nodes/guardrail.py`), which is
-            # the one place that knows which happened.
+            # "refuse" when input_rail/output_rail actually blocked something; "clarify" for the plain unclear-intent case.
             action = "refuse" if update.get("error") in _GUARDRAIL_BLOCKED_ERRORS else "clarify"
             events.append(GuardrailEvent(action=action, message=str(update.get("answer") or "")))
 
@@ -619,7 +441,7 @@ class _EventTranslator:
         self._delta_emitted = False
         return events
 
-    # -- "messages": auto-streamed model output (§3.6's "plain-text" case) --
+    # -- "messages": auto-streamed model output ------------------------------
 
     def _handle_messages(self, payload: Any) -> list[ChatSSEEvent]:
         if self._current_node is None or self._current_node not in _MESSAGES_MODE_NODES:
@@ -638,7 +460,7 @@ class _EventTranslator:
         self._delta_emitted = True
         return [MessageDeltaEvent(message_id=self._message_id, text=text)]
 
-    # -- "custom": whatever a node pushed via `get_stream_writer()` ---------
+    # -- "custom": whatever a node pushed via get_stream_writer() ------------
 
     def _handle_custom(self, payload: Any) -> list[ChatSSEEvent]:
         if not isinstance(payload, Mapping):

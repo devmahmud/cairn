@@ -1,9 +1,4 @@
-"""Top-level API router aggregation (BLUEPRINT.md §2).
-
-Each `modules/<name>` vertical slice owns its own `router.py`; this is the
-single place they get mounted onto the app. Later scaffold steps (chat,
-auth, ...) add their routers here as those modules land (§8 steps 6, 7).
-"""
+"""Each modules/<name> vertical slice owns its own router.py; this is the single place they get mounted onto the app."""
 
 from __future__ import annotations
 

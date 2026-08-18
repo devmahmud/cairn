@@ -1,15 +1,4 @@
-"""Tier 2 of the config system: Postgres-backed runtime overrides (BLUEPRINT.md §3.2).
-
-`config_overrides(key, value, updated_at)` (created by the first Alembic
-migration) is the kill-switch / feature-toggle plane -- a plain `UPDATE`
-flips behavior cluster-wide with no redeploy (e.g. `tool.web_search.enabled`,
-`guardrails.strict`). Reads are served from an in-process cache refreshed on
-a short TTL rather than hitting Postgres on every call site; that is simpler
-than `LISTEN/NOTIFY` for a template and is correct enough for flags that
-don't need sub-second propagation. `refresh()` is exposed for callers (e.g.
-an admin endpoint after an `UPDATE`) that want tighter propagation than the
-TTL alone gives.
-"""
+"""Postgres-backed runtime overrides (config_overrides table), cached in-process on a short TTL rather than LISTEN/NOTIFY -- simpler, and correct enough for flags that don't need sub-second propagation."""
 
 from __future__ import annotations
 
@@ -26,13 +15,7 @@ DEFAULT_TTL_SECONDS = 5.0
 
 
 class RuntimeConfig:
-    """Cached accessor over the `config_overrides` table.
-
-    One instance per process, backed by the app's async engine (wired
-    through the DI container in a later scaffold step). Values are stored as
-    `jsonb`, so reads come back as already-decoded Python bool/str/int/float/
-    dict/list -- no ad hoc string parsing at call sites.
-    """
+    """Values are stored as jsonb, so reads come back already-decoded (bool/str/int/float/dict/list) -- no parsing needed at call sites."""
 
     def __init__(self, engine: AsyncEngine, *, ttl_seconds: float = DEFAULT_TTL_SECONDS) -> None:
         self._engine = engine
@@ -49,13 +32,7 @@ class RuntimeConfig:
         return bool(value)
 
     async def get_all(self) -> dict[str, Any]:
-        """Return a snapshot of every currently-cached override.
-
-        Used by callers that need to filter by key *prefix* (e.g.
-        `core/behavior/loader.py` pulling every `behavior.<name>.*` row to
-        overlay onto a hot-reloaded YAML file, §3.2/§3.5) rather than one
-        known key at a time.
-        """
+        """Snapshot of every cached override -- for callers (e.g. behavior/loader.py) that filter by key prefix rather than fetch one key."""
         await self._ensure_fresh()
         return dict(self._cache)
 
@@ -73,8 +50,6 @@ class RuntimeConfig:
         try:
             await self.refresh()
         except Exception:
-            # A transient DB blip shouldn't take a feature flag (and
-            # everything gated on it) down with it -- keep serving the
-            # last-known-good cache and try again on the next TTL window.
+            # A transient DB blip shouldn't take a feature flag down with it -- keep serving the last-known-good cache and retry next TTL window.
             logger.warning("runtime_config.refresh_failed", exc_info=True)
             self._loaded_at = time.monotonic()

@@ -1,25 +1,4 @@
-"""`rag` -- hybrid retrieve -> abstain-or-ground -> cite (BLUEPRINT.md §3.6, §3.8).
-
-Retrieves via the injected `RetrievalService` (local fixture, pgvector
-hybrid, or reranked -- all interchangeable behind the Protocol, §3.8),
-abstains when the top (possibly reranked) result's score falls below
-`config/behavior/retrieval.yaml`'s `abstain_score_threshold` -- calibrated,
-not a bare `0.0` (§3.8) -- and otherwise grounds the answer in the retrieved
-passages via `config/prompts/docs_assistant/answer.j2`'s numbered-citation
-format, treating every retrieved passage as *context to cite*, never as
-instructions to follow (OWASP LLM01's indirect-injection note, §3.12 --
-retrieved text is untrusted).
-
-**Streaming (§3.6, §3.7):** this is the template's worked example of a
-"structured node" in the streaming-technique sense -- its answer is only
-final once retrieval, abstention, and citation-numbering all land together,
-so it pushes incremental text through LangGraph's custom stream writer
-(`get_stream_writer()`) as it generates, rather than relying on
-`on_chat_model_stream`/`stream_mode="messages"` the way the plain `answer`
-node does. `modules/chat/chat_stream.py`'s translator knows to prefer this
-node's custom-writer chunks over its (also-present, but redundant) raw model
-stream.
-"""
+"""rag: retrieve -> abstain-or-ground -> cite. Retrieved passages are untrusted context to cite, never instructions to follow (OWASP LLM01)."""
 
 from __future__ import annotations
 
@@ -43,20 +22,7 @@ logger = structlog.get_logger(__name__)
 
 _DEFAULT_TOP_K = 5
 _DEFAULT_ABSTAIN_THRESHOLD = 0.15
-#: Reciprocal Rank Fusion is a rank-based fusion score, not a relevance
-#: probability -- with `modules/retrieval/pgvector.py`'s default
-#: `DEFAULT_RRF_K=60` it tops out around `2/61 ≈ 0.033`, so comparing it
-#: against `_DEFAULT_ABSTAIN_THRESHOLD` (calibrated for a cross-encoder
-#: reranker's ~[0, 1] score) would abstain on *every* query whenever
-#: reranking is skipped or unavailable (`RERANK_ENABLED=false`, or
-#: `RerankedRetrieval`'s no-reranker-configured/reranker-unreachable
-#: fallback -- both documented, supported configurations, §3.8). RRF's rank
-#: fusion carries no absolute-quality signal to calibrate a non-zero bar
-#: against without a real per-corpus eval set (§3.11's retrieval eval is the
-#: place to tune this) -- `0.0` only catches a genuinely empty candidate
-#: set here, same as the `not docs` check just above it, so an unreranked
-#: deployment answers from best-effort hybrid results instead of abstaining
-#: unconditionally.
+# RRF scores top out ~0.033, far below a reranker-calibrated threshold -- comparing against that would abstain on every unreranked query.
 _DEFAULT_ABSTAIN_THRESHOLD_UNRERANKED = 0.0
 
 _ABSTAIN_MESSAGE = (
@@ -104,10 +70,7 @@ class RagNode(GraphNode[ChatState]):
         try:
             docs = await self._retrieval_service.query(question, top_k)
         except Exception:
-            # Fallback ladder (§3.6): "RAG-empty -> defer" also covers a
-            # retrieval-layer failure (pgvector/embedding-service down) --
-            # from the user's point of view it's the same "I don't have an
-            # answer for that" outcome, not a hard turn failure.
+            # A retrieval-layer failure gets the same "I don't have an answer" defer as no-results, not a hard turn failure.
             logger.warning("rag.retrieval_failed_deferring", exc_info=True)
             return _defer_result(error="rag_retrieval_failed")
 
@@ -155,6 +118,7 @@ class RagNode(GraphNode[ChatState]):
                 ],
             )
             llm = self._llm_factory("rag")
+            # Custom writer, not the model's auto-stream: chat_stream.py's translator relies on this to avoid double-emitting.
             writer = stream_writer_or_noop()
             pieces: list[str] = []
             async for chunk in llm.astream(

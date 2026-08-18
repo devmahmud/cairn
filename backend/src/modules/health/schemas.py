@@ -1,4 +1,4 @@
-"""Response contracts for the health endpoints (BLUEPRINT.md §3.9, §8 step 2)."""
+"""Response contracts for the health endpoints."""
 
 from __future__ import annotations
 

@@ -1,17 +1,4 @@
-"""Business logic for the conversations module (BLUEPRINT.md §2, §3.3).
-
-router -> service -> repository -> schemas. Ownership (`user_id` scoping)
-is enforced at the repository layer (§3.9); this layer maps "doesn't
-exist" and "exists but isn't yours" to the same `NotFoundError` -- an
-ownership boundary should never let a caller distinguish the two from the
-response alone.
-
-Takes repository *instances*, not a raw session -- `router.py` builds them
-from the request-scoped session (§3.3's commit-per-request `get_session`).
-That keeps this class's dependency on persistence explicit and swappable,
-which is what makes `tests/unit/test_conversations_service.py` possible
-without a real database (§3.11: "unit -- fixture-backed, no network").
-"""
+"""Ownership-boundary errors ("doesn't exist" and "not yours") both map to the same NotFoundError -- a caller must never distinguish the two from the response."""
 
 from __future__ import annotations
 

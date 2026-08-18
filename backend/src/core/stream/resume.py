@@ -1,22 +1,4 @@
-"""Redis-backed durable stream bus (BLUEPRINT.md §3.7, §8 step 6).
-
-Backs `STREAM_DURABLE=true` mode: `modules/chat/chat_stream.py`'s producer
-writes `id:`-stamped frames here, decoupled from any one HTTP request, keyed
-by a server-generated `stream_id`; `GET /chat/stream/{stream_id}` tails them.
-A turn's frames are a Redis Stream (`XADD`/`XRANGE`/`XREAD`) -- its native
-ID ordering does the replay-then-tail job for free, and a client's
-`Last-Event-ID` (our own monotonic `id:`, stamped by
-`modules/chat/sse.py::SSEEventFormatter`, *not* Redis' own `ms-seq` id) is
-resolved to a Redis-native starting point with one `XRANGE` scan before the
-blocking tail begins.
-
-`build_redis_client`/`build_stream_bus` return `None` when `REDIS_URL` is
-unset -- offline-first (design principle #4): constructing the DI
-container's providers never requires Redis to be running, and
-`ChatStreamer.durable_enabled` degrades to simple-mode streaming rather than
-erroring (§3.7: "If REDIS_URL is unset, this mode is unavailable ... not
-error").
-"""
+"""Redis-backed durable stream bus; replay/tail is keyed by our own monotonic id (not Redis' native ms-seq id)."""
 
 from __future__ import annotations
 
@@ -32,24 +14,9 @@ logger = structlog.get_logger(__name__)
 
 
 class RedisStreamClient(Protocol):
-    """The slice of `redis.asyncio.Redis` `RedisStreamBus` actually needs.
+    """Protocol, not a hard dependency on redis.asyncio.Redis -- keeps this testable against an in-memory fake."""
 
-    A `Protocol`, not a hard dependency on `redis.asyncio.Redis` -- same
-    reasoning as `core/prompts/engine.py`'s `LangfusePromptClient`: keeps
-    this class trivially testable against an in-memory fake with no real
-    Redis involved, and decouples it from the concrete client's (much
-    larger, loosely-typed) surface.
-    """
-
-    # Loosely typed on purpose: redis-py's own stubs accept `bytes | str |
-    # memoryview` (and use invariant `dict[...]` params) throughout, which
-    # no reasonably-narrow signature here stays structurally compatible
-    # with -- this Protocol exists to pin down *which methods* `RedisStreamBus`
-    # needs, not to re-derive redis-py's full parameter typing. Plain
-    # `def ... -> Awaitable[Any]`, not `async def`, for the same reason on
-    # the return side (an `async def` here would require the implementer's
-    # call to resolve to exactly `Coroutine[Any, Any, Any]`, which
-    # `Awaitable[bool]`-declared real methods don't).
+    # Loosely typed on purpose: redis-py's stubs use bytes|str|memoryview, and Awaitable[Any] keeps this compatible with real Awaitable[bool] etc. methods.
     def xadd(self, name: str, fields: Any) -> Awaitable[Any]: ...
     def xrange(
         self, name: str, min: str = ..., max: str = ..., count: int | None = ...
@@ -63,26 +30,19 @@ class RedisStreamClient(Protocol):
     def expire(self, name: str, time: int) -> Awaitable[Any]: ...
 
 
-#: How long a turn's Redis Stream (and its stop flag) survive after the last
-#: write -- long enough for a client to reconnect and resume well past any
-#: realistic network blip, short enough not to accumulate forever.
+# Long enough for a client to reconnect past a network blip, short enough not to accumulate forever.
 _STREAM_TTL_SECONDS = 3600
 _STOP_FLAG_TTL_SECONDS = 3600
-#: `XREAD BLOCK` timeout per poll (ms) -- bounds how long a tailer can go
-#: without re-checking the stop flag (`request_stop`) or noticing the
-#: producer already finished (`publish_end`'s sentinel).
+# XREAD BLOCK timeout per poll; bounds how long a tailer goes without re-checking the stop flag.
 _BLOCK_MS = 5000
 
-#: Sentinel `event:` value marking "the producer is done" (success, error,
-#: or stopped) -- written by `publish_end`, recognized by `replay_and_tail`.
 _END_SENTINEL = "__end__"
 
 
 def build_redis_client(settings: Settings) -> redis.Redis | None:
     if not settings.REDIS_URL:
         return None
-    # Lazy connection pool -- `from_url` itself never touches the network
-    # (offline-first); the first actual command does.
+    # Lazy: from_url never touches the network; the first real command does.
     return redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 
@@ -107,30 +67,11 @@ class RedisStreamBus:
         return f"chat:stream:{stream_id}:owner"
 
     async def record_owner(self, stream_id: str, user_id: str) -> None:
-        """Bind a durable-mode stream to the user who started it (§3.9's
-        "ownership checks enforced on every conversations/messages query"
-        principle, extended to the stream tail/stop endpoints -- see
-        `modules/chat/router.py`'s ownership check).
-
-        Called synchronously from `_start_chat_turn`, before the request
-        returns `X-Stream-Id` to the client -- not from inside the
-        (decoupled, may-not-have-run-yet) producer task -- so there is no
-        window where a client that already has the `stream_id` could race a
-        resume/stop call against this write.
-        """
+        """Called before the response returns X-Stream-Id, so no window exists for a resume/stop call to race this write."""
         await self._redis.set(self._owner_key(stream_id), user_id, ex=_STREAM_TTL_SECONDS)
 
     async def get_owner(self, stream_id: str) -> str | None:
-        """`None` means "no owner on record" -- either the stream doesn't
-        exist (never spawned, or its TTL already expired) or predates this
-        ownership tracking; callers that need "stream not found" vs. "stream
-        exists but isn't yours" distinguished separately (as
-        `modules/chat/router.py` does) already have another way to check
-        existence (`request_stop`'s return value, `replay_and_tail`'s own
-        "nothing buffered" case) -- this alone intentionally doesn't fail
-        closed on "unknown", to avoid turning a TTL expiry into a spurious
-        403/404 for the stream's own rightful owner.
-        """
+        """None means "no owner on record"; intentionally doesn't fail closed, to avoid a TTL expiry becoming a false rejection."""
         value = await self._redis.get(self._owner_key(stream_id))
         return str(value) if value is not None else None
 
@@ -145,15 +86,7 @@ class RedisStreamBus:
         await self._redis.expire(key, _STREAM_TTL_SECONDS)
 
     async def request_stop(self, stream_id: str) -> bool:
-        """Ask the producer to stop; returns whether the stream is known at all.
-
-        `True` doesn't guarantee the producer *will* stop promptly -- it only
-        checks between events (`replay_and_tail`'s own poll loop is the other
-        half: a tailer that sees the stop flag also stops relaying). A
-        same-process `asyncio.Task.cancel()` (the router's own registry,
-        `modules/chat/chat_stream.py`) is the immediate-effect complement to
-        this Redis-backed, cross-process-safe signal.
-        """
+        """Doesn't guarantee prompt stop -- only checked between events; asyncio.Task.cancel() is the same-process complement."""
         exists = bool(await self._redis.exists(self._events_key(stream_id)))
         await self._redis.set(self._stop_key(stream_id), "1", ex=_STOP_FLAG_TTL_SECONDS)
         return exists
@@ -164,17 +97,7 @@ class RedisStreamBus:
     async def replay_and_tail(
         self, stream_id: str, *, last_event_id: str | None
     ) -> AsyncIterator[tuple[str, str, str]]:
-        """Yield `(sse_id, event_type, data_json)` triples: replay, then tail.
-
-        `last_event_id=None` replays from the very start (a fresh
-        `POST /chat` in durable mode, tailing its own just-started
-        producer). A non-`None` value is the client's `Last-Event-ID` on
-        reconnect (`GET /chat/stream/{stream_id}?last_event_id=...`) --
-        resolved to a Redis-native id via one `XRANGE` scan so the
-        `XREAD`-based tail below only returns entries strictly after it.
-        Returns (stops iterating) once the `publish_end` sentinel is seen or
-        a stop is requested.
-        """
+        """Yields (sse_id, event_type, data_json): replay from last_event_id (or the start if None), then tail until stopped."""
         key = self._events_key(stream_id)
         start = await self._resolve_start(key, last_event_id)
         if start is None:
@@ -201,28 +124,18 @@ class RedisStreamBus:
         raw = await self._redis.xrange(key, min="-", max="+")
         entries = _normalize_stream_entries(raw)
         if not entries:
-            # Nothing buffered under this `stream_id` at all -- the caller
-            # (the `GET` resume endpoint) treats this as "unknown stream".
+            # Nothing buffered under this stream_id -- the caller treats this as "unknown stream".
             return None
 
         for redis_id, fields in entries:
             if fields.get("id") == last_event_id:
                 return redis_id
-        # The client's last-seen id isn't in our buffer (e.g. it predates
-        # this stream's TTL window) -- replay everything we still have
-        # rather than silently dropping events.
+        # Last-seen id isn't in our buffer (e.g. predates the TTL window) -- replay everything rather than drop events.
         return "0"
 
 
 def _normalize_stream_entries(raw: Any) -> list[tuple[str, dict[str, str]]]:
-    """`XRANGE`'s `list[(id, fields)]`, normalized to plain `str`s.
-
-    `decode_responses=True` (`build_redis_client`) already gives `str`s at
-    runtime; redis-py's own stubs still type every field as `bytes | str |
-    None` (RESP2/RESP3, decoded/undecoded -- one set of stubs covers every
-    client configuration), so this is where that gets narrowed down to what
-    this module actually works with.
-    """
+    """Narrows redis-py's bytes | str | None field stubs to plain str, matching decode_responses=True's actual runtime shape."""
     if not raw:
         return []
     entries: list[tuple[str, dict[str, str]]] = []
@@ -232,13 +145,7 @@ def _normalize_stream_entries(raw: Any) -> list[tuple[str, dict[str, str]]]:
 
 
 def _flatten_xread_response(response: Any, key: str) -> list[tuple[str, dict[str, str]]]:
-    """`XREAD`'s per-key response, flattened to the same shape `XRANGE` gives.
-
-    redis-py's stubs allow two shapes for the same call depending on RESP
-    protocol version: `dict[key, entries]` (RESP2) or `[[key, entries], ...]`
-    (RESP3) -- both are handled here so this module doesn't care which the
-    connected server/client negotiated.
-    """
+    """Handles both RESP2 (dict) and RESP3 (list-of-pairs) shapes redis-py's stubs allow for the same call."""
     if not response:
         return []
     if isinstance(response, dict):

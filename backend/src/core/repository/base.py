@@ -1,12 +1,4 @@
-"""Thin generic repository base (BLUEPRINT.md §3.3).
-
-Deliberately NOT a generic `field__op` filter DSL -- concrete repositories
-(`modules/*/repository.py`) write their own explicit, typed `select()`
-query methods (clearer, `mypy`-friendly, supports joins/projections). This
-base only covers what's genuinely generic across every entity: get-by-pk,
-add, delete, and a keyset-pagination helper a concrete repository's own
-`select()` can be run through.
-"""
+"""Deliberately not a generic field__op filter DSL -- concrete repositories write their own typed select() query methods; this covers only get/add/delete/paginate."""
 
 from __future__ import annotations
 
@@ -19,34 +11,21 @@ from sqlalchemy.orm import InstrumentedAttribute
 
 from core.db.base import Base
 
-# A list endpoint with no explicit `limit` gets this many rows, never
-# "everything" (§3.3: "a default LIMIT on list reads"). `MAX_LIST_LIMIT`
-# caps a caller-supplied `limit` so a client can't force an unbounded scan.
+# MAX_LIST_LIMIT caps a caller-supplied limit so a client can't force an unbounded scan.
 DEFAULT_LIST_LIMIT = 50
 MAX_LIST_LIMIT = 200
 
 
 @dataclass(frozen=True, slots=True)
 class Page[ModelT: Base]:
-    """One page of a keyset-paginated list read.
-
-    `next_cursor` is the `(order_by, tiebreaker)` value pair of the last
-    item on this page -- pass it back as `after` to fetch the next page.
-    `None` means this was the last page.
-    """
+    """next_cursor is the (order_by, tiebreaker) pair of the last item on this page; pass it back as `after` for the next page, or None if this was the last."""
 
     items: list[ModelT]
     next_cursor: tuple[Any, Any] | None
 
 
 class BaseRepository[ModelT: Base]:
-    """Generic get/add/delete + keyset pagination for one ORM entity.
-
-    Not a unit of work -- callers own the session's transaction boundary
-    (commit-per-request for REST via `core.db.engine.get_session`, or the
-    chat streamer's own short transactions for a turn, §3.3). Nothing here
-    calls `session.commit()`.
-    """
+    """Not a unit of work -- callers own the session's transaction boundary; nothing here calls session.commit()."""
 
     def __init__(self, session: AsyncSession, model: type[ModelT]) -> None:
         self.session = session
@@ -74,16 +53,7 @@ class BaseRepository[ModelT: Base]:
         limit: int | None = None,
         descending: bool = True,
     ) -> Page[ModelT]:
-        """Run a concrete repository's own `select()` through keyset (seek)
-        pagination, ordered by `(order_by, tiebreaker)` for a stable total
-        order even when `order_by` alone has ties (e.g. same-microsecond
-        `created_at` values) -- a plain `OFFSET`/single-column cursor would
-        risk skipping or repeating rows across pages in that case.
-
-        `stmt` should already carry every filter/join a caller needs (e.g.
-        ownership scoping, §3.9) -- this only appends the seek predicate,
-        the order, and the limit; it never builds `WHERE` clauses itself.
-        """
+        """Orders by (order_by, tiebreaker) for a stable total order even when order_by alone has ties -- a plain OFFSET cursor would risk skipping/repeating rows."""
         effective_limit = max(1, min(limit or DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT))
 
         if after is not None:

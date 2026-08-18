@@ -1,12 +1,4 @@
-"""REST endpoints for conversation/message CRUD (BLUEPRINT.md §2, §8 step 3).
-
-Wired via plain FastAPI `Depends` (not the `dependency-injector` container,
-which is reserved for the singleton agent graph -- §3.4: "pick one wiring
-model per concern and don't mix `Provide` and `Depends` for the same kind
-of dependency"). `get_session` owns commit/rollback (commit-per-request,
-§3.3) -- nothing in this router or the service/repository layers below it
-calls `session.commit()` directly.
-"""
+"""Plain FastAPI Depends, not the DI container (reserved for the singleton agent graph) -- get_session owns commit/rollback; nothing here calls session.commit() directly."""
 
 from __future__ import annotations
 

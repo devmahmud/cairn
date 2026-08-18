@@ -1,11 +1,4 @@
-"""FastAPI exception handlers (BLUEPRINT.md §3.9).
-
-Registered via `add_exception_handler`, not a `BaseHTTPMiddleware` wrapper --
-the latter has to buffer the response to hand your callback a chance to
-inspect/replace it, which breaks the SSE streaming endpoints this template
-exists to serve (§3.7). Exception handlers run inside Starlette's exception
-middleware, which never buffers a streaming response.
-"""
+"""add_exception_handler, not BaseHTTPMiddleware -- the latter buffers the response, which breaks the SSE streaming endpoints this template serves."""
 
 from __future__ import annotations
 
@@ -47,13 +40,6 @@ async def _handle_unexpected_error(request: Request, exc: Exception) -> JSONResp
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    """Register typed-error and catch-all JSON exception handlers.
-
-    Order matters: FastAPI/Starlette dispatch to the most specific matching
-    handler, so registering both `AppError` and `Exception` is safe --
-    `AppError` subclasses hit `_handle_app_error`, everything else falls
-    through to the catch-all 500 handler instead of an unhandled traceback
-    reaching the client.
-    """
+    """FastAPI dispatches to the most specific matching handler -- AppError subclasses hit _handle_app_error, everything else falls through to the catch-all."""
     app.add_exception_handler(AppError, _handle_app_error)
     app.add_exception_handler(Exception, _handle_unexpected_error)

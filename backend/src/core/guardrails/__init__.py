@@ -1,10 +1,4 @@
-"""Guardrails: input rail -> LLM -> output rail (BLUEPRINT.md §3.12).
-
-No-op by default (`GUARDRAILS_ENABLED=false`) -- boots and this template's
-test suite runs with zero guardrail credentials. See `rails.py` for the
-`input_rail`/`output_rail` entry points `agents/chat/nodes/input_rail.py`/
-`output_rail.py` call.
-"""
+"""No-op by default (GUARDRAILS_ENABLED=false) -- boots and the test suite run with zero guardrail credentials."""
 
 from __future__ import annotations
 

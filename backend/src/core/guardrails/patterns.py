@@ -1,14 +1,4 @@
-"""Deterministic denylist/delimiter check (BLUEPRINT.md §3.12, OWASP LLM01).
-
-Zero-dependency layer 1 of every rail (`core/guardrails/rails.py`) -- always
-runs first when `GUARDRAILS_ENABLED=true`, catches the crudest prompt-
-override/delimiter-injection attempts without a guard-model call. Patterns
-live in `config/behavior/guardrails.yaml`, read through the same
-`BehaviorConfig` (`core/behavior/loader.py`) every other rules file in this
-template goes through -- hot-reloaded (§3.2 tier 3) and overridable
-cluster-wide via the `config_overrides` table (§3.2 tier 2, keys
-`behavior.guardrails.*`).
-"""
+"""Zero-dependency layer 1 of every rail -- always runs first; patterns come from config/behavior/guardrails.yaml via BehaviorConfig."""
 
 from __future__ import annotations
 

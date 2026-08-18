@@ -1,21 +1,4 @@
-"""ORM models for the auth module (BLUEPRINT.md §3.3, §3.9, §8 step 7).
-
-`User` is the real replacement for `modules/conversations/models.py`'s
-interim `_users_table` stand-in -- it maps the *same* `users` table the
-initial migration already created (columns chosen there specifically to
-match `fastapi-users`' expectations: `hashed_password`/`is_active`/
-`is_verified`/`is_superuser`, per that migration's own docstring), so no
-migration is needed just to grow the table. `SQLAlchemyBaseUserTableUUID`
-supplies `id`/`email`/`hashed_password`/`is_active`/`is_superuser`/
-`is_verified`; `profile`/`created_at`/`updated_at` are added on top to match
-the migration's remaining columns.
-
-`RefreshToken` backs `modules/auth/refresh_tokens.py`'s rotation/revocation
--- see that module's docstring for why this template pairs a short-lived
-JWT access token with a DB-backed, revocable refresh token rather than
-relying on `fastapi-users`' stock JWT backend alone (which has no built-in
-refresh/revocation story for a stateless token).
-"""
+"""User maps the same users table the initial migration already created (fastapi-users-compatible columns) -- no migration needed just to add this model."""
 
 from __future__ import annotations
 
@@ -55,9 +38,7 @@ class RefreshToken(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    # SHA-256 hex digest of the raw token -- the raw value is only ever
-    # returned to the client once, at issuance/rotation time, never stored
-    # (`modules/auth/refresh_tokens.py::_hash`).
+    # SHA-256 digest -- the raw value is only ever returned to the client once, never stored.
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")

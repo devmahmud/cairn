@@ -1,12 +1,4 @@
-"""Opaque keyset-pagination cursor codec for the conversations module (BLUEPRINT.md §3.3).
-
-`core/repository/base.py`'s `_paginate_keyset` is intentionally
-type-agnostic (thin generic CRUD, no filter DSL) and works in typed
-`(order_by, tiebreaker)` value pairs -- it has no opinion on how a caller
-turns that pair into an HTTP `cursor` query param. This module owns that
-encoding for the one cursor shape both repositories in this module use:
-`(created_at, id)`.
-"""
+"""Owns the cursor encoding _paginate_keyset (type-agnostic) has no opinion on: the (created_at, id) pair both repositories in this module use."""
 
 from __future__ import annotations
 

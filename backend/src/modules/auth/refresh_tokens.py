@@ -1,27 +1,4 @@
-"""DB-backed refresh-token rotation + revocation (BLUEPRINT.md §3.9, §8 step 7).
-
-`fastapi-users`' stock JWT backend is stateless and short-lived by design --
-there's no built-in "refresh" concept (a new access token normally just
-means logging in again) and its `/logout` route is a no-op for a JWT
-strategy (nothing server-side to invalidate). That's a real gap against
-this step's brief ("register/login/refresh/logout endpoints" with genuine
-revocation), so this template pairs `fastapi-users`' JWT access tokens with
-its own minimal, DB-backed refresh-token table:
-
-- **Issue** a random, high-entropy token at login; store only its SHA-256
-  hash (never the raw value -- the same posture a password hash gets).
-- **Rotate** on every `/auth/refresh` call: the presented token is revoked
-  and a new one issued in the same operation, so a refresh token is
-  single-use (limits the blast radius of a leaked one to one exchange).
-- **Revoke** on `/auth/logout` -- immediate, real invalidation (unlike the
-  JWT access token itself, which stays valid until its own short expiry;
-  `core/security/current_user.py`'s docstring states that trade-off
-  explicitly).
-
-Callers own the session's transaction boundary (this class never calls
-`session.commit()`), matching every other repository in this codebase
-(`core/repository/base.py`'s docstring).
-"""
+"""fastapi-users' JWT backend is stateless with no refresh/revoke -- this pairs it with a DB-backed refresh-token table: hashed at rest, single-use (rotated), revocable on logout."""
 
 from __future__ import annotations
 
@@ -49,8 +26,7 @@ class RefreshTokenRepository:
         self.session = session
 
     async def issue(self, user_id: UUID) -> tuple[str, datetime]:
-        """Mint and store a new refresh token for `user_id`; return the raw
-        value (returned to the client exactly once) and its expiry."""
+        """Returns the raw token value, given to the client exactly once, and its expiry."""
         raw_token = secrets.token_urlsafe(_TOKEN_BYTES)
         expires_at = datetime.now(UTC) + timedelta(seconds=settings.REFRESH_TOKEN_LIFETIME_SECONDS)
         self.session.add(
@@ -60,24 +36,14 @@ class RefreshTokenRepository:
         return raw_token, expires_at
 
     async def rotate(self, raw_token: str) -> UUID:
-        """Revoke `raw_token` and return the `user_id` it belonged to.
-
-        Raises `UnauthorizedError` if the token is unknown, already
-        revoked, or expired -- the caller (`modules/auth/router.py`) mints
-        the actual replacement via a fresh `issue()` call, kept as two
-        explicit steps rather than one method so a caller that only wants
-        to revoke (`/auth/logout`) doesn't need a variant that also issues.
-        """
+        """Revokes raw_token and returns its user_id; the caller mints the replacement via a separate issue() call, so logout doesn't need an issuing variant."""
         row = await self._get_active(raw_token)
         row.revoked_at = datetime.now(UTC)
         await self.session.flush()
         return row.user_id
 
     async def revoke(self, raw_token: str) -> None:
-        """Best-effort revoke -- unlike `rotate`, an already-invalid token
-        is a silent no-op (logout should never fail because the token was
-        already revoked/expired/unknown; the caller's intent -- "this
-        token shouldn't work anymore" -- is already satisfied)."""
+        """Unlike rotate, revoking an already-invalid token is a silent no-op -- logout shouldn't fail just because the token was already gone."""
         stmt = select(RefreshToken).where(RefreshToken.token_hash == _hash(raw_token))
         row = (await self.session.execute(stmt)).scalar_one_or_none()
         if row is not None and row.revoked_at is None:

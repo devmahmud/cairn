@@ -1,13 +1,4 @@
-"""Pydantic schemas for the auth module (BLUEPRINT.md §3.9, §8 step 7).
-
-`UserRead`/`UserCreate`/`UserUpdate` are `fastapi-users`' own generic
-schemas, narrowed to a UUID id -- no fields added here (`profile` is an
-internal, not-yet-API-surfaced column; expose it explicitly later if a
-client needs to read/write it). `TokenPair`/`RefreshRequest` are this
-template's own -- `fastapi-users` has no opinion on refresh-token shape
-since it doesn't implement refresh itself (`modules/auth/refresh_tokens.py`'s
-docstring explains why this template adds one).
-"""
+"""UserRead/UserCreate/UserUpdate are fastapi-users' own generic schemas; TokenPair/RefreshRequest are this template's own, since fastapi-users has no refresh concept."""
 
 from __future__ import annotations
 

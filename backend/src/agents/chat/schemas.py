@@ -1,9 +1,4 @@
-"""Structured-output schemas for the chat graph (BLUEPRINT.md §3.6, §8 step 5).
-
-Passed to `BaseChatModel.with_structured_output(...)` -- a different concern
-from `chat/state.py`'s `TypedDict` graph state: these are per-*call* forced
-output shapes, not the graph's running state.
-"""
+"""Passed to with_structured_output() -- distinct from state.py's TypedDict graph state: a per-call forced output shape, not running state."""
 
 from __future__ import annotations
 
@@ -11,8 +6,6 @@ from pydantic import BaseModel, Field
 
 
 class ClassifyResult(BaseModel):
-    """One forced-tool-call classification of a user turn (§3.6's `classify`)."""
-
     intent: str = Field(
         description=(
             "The single best-matching intent name from the provided list. "

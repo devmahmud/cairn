@@ -1,13 +1,4 @@
-"""Provider-agnostic LLM factory -- the one swap-point (BLUEPRINT.md §3.6).
-
-`get_llm(role)` is the only place a graph node reaches for a model client.
-Point `OPENAI_BASE_URL` at a self-hosted **LiteLLM** proxy (recommended --
-budgets/fallback/rate-limit for free, §3.13) or directly at Ollama/vLLM for
-a fully local stack; leave it blank to hit OpenAI's own API. Every node
-depends on this function (or, in tests, a fake with the same signature)
-rather than constructing `ChatOpenAI` itself -- design principle #3,
-"provider-agnostic agents: one `get_llm()` swap-point".
-"""
+"""get_llm(role) is the one place a graph node reaches for a model client -- point OPENAI_BASE_URL at LiteLLM/Ollama/vLLM, or leave blank for OpenAI directly."""
 
 from __future__ import annotations
 
@@ -25,14 +16,7 @@ logger = structlog.get_logger(__name__)
 
 
 def get_llm(role: str = "answer") -> ChatOpenAI:
-    """Build a `ChatOpenAI` client configured for `role` (BLUEPRINT.md §3.6).
-
-    `max_retries=3` is the client-side retry for a single call (distinct
-    from LangGraph's node-level `RetryPolicy`, which re-runs the whole node
-    -- both matter, see `agents/chat/graph.py`). Langfuse tracing is wired
-    in as a callback only when `LANGFUSE_ENABLED=true`; the offline-first
-    default (`false`) never imports the `langfuse` SDK's callback surface.
-    """
+    """max_retries=3 is the client-side retry for one call, distinct from (and complementary to) LangGraph's node-level RetryPolicy which re-runs the whole node."""
     cfg = role_config(role)
     return ChatOpenAI(
         model=cfg.model,
@@ -54,14 +38,7 @@ def _langfuse_callbacks() -> list[BaseCallbackHandler]:
 
 @lru_cache(maxsize=1)
 def _tracing_callback_handler() -> BaseCallbackHandler | None:
-    """Build (once) the Langfuse LangChain callback handler, or `None`.
-
-    Cached (including a `None` result) so a Langfuse outage is logged once,
-    not on every single `get_llm()` call within the process -- mirrors
-    `core/prompts/langfuse_client.py`'s degrade-gracefully stance (§3.5):
-    `LANGFUSE_ENABLED=true` with an unreachable/misconfigured Langfuse
-    disables *tracing*, not the LLM call itself.
-    """
+    """Cached (including None) so a Langfuse outage logs once, not per get_llm() call; disables tracing only, not the LLM call itself."""
     try:
         from langfuse import Langfuse
         from langfuse.langchain import CallbackHandler
@@ -73,10 +50,7 @@ def _tracing_callback_handler() -> BaseCallbackHandler | None:
         )
         return None
     try:
-        # Registers a tracing-enabled client under this public key so
-        # `CallbackHandler(public_key=...)` below can look it up. Separate
-        # from `core/prompts/langfuse_client.py`'s client -- that one is
-        # `tracing_enabled=False` (prompt fetching only); this one traces.
+        # Registers a tracing client under this public key so CallbackHandler(public_key=...) below can look it up; separate from langfuse_client.py's.
         Langfuse(
             public_key=settings.LANGFUSE_PUBLIC_KEY or None,
             secret_key=settings.LANGFUSE_SECRET_KEY or None,

@@ -1,21 +1,4 @@
-"""`BehaviorConfig` -- loads `config/behavior/*.yaml` (BLUEPRINT.md §3.2, §3.5).
-
-Sibling of `core/prompts/`: this is tier 3 ("Prompts/behavior files + hot
-reload") for the YAML half rather than the `.j2` half -- rules, guardrail
-patterns, and (per §3.6) the deterministic `routing.yaml` a later scaffold
-step's `route` graph node reads. Two things layer on top of the raw parsed
-YAML, both per §3.2/§3.5:
-
-1. **Hot reload.** `reload()` drops the cached parse; wired as the
-   `on_change` callback for the same `watchfiles`-driven watcher
-   (`core/prompts/watcher.py`) that reloads prompt templates, so editing a
-   behavior file needs no rebuild/restart either.
-2. **Runtime overrides.** Rows in the `config_overrides` table (tier 2,
-   `core/runtime_config.py`) keyed `behavior.<name>.<dotted.path>` are
-   overlaid onto the file's parsed dict on every `get()` call -- a flag flip
-   there takes effect cluster-wide without touching the file at all, and
-   without a redeploy.
-"""
+"""Loads config/behavior/*.yaml with two layers on top: hot reload via watcher.py, and config_overrides rows keyed "behavior.<name>.<dotted.path>" overlaid on every get()."""
 
 from __future__ import annotations
 
@@ -29,13 +12,6 @@ from core.errors.exceptions import NotFoundError, ValidationAppError
 
 
 class OverridesSource(Protocol):
-    """The slice of `core.runtime_config.RuntimeConfig` this loader needs.
-
-    A `Protocol`, not a hard dependency on the concrete class, so this
-    module is testable with a plain in-memory fake -- no Postgres, matching
-    this codebase's "unit -- fixture-backed, no network" stance (§3.11).
-    """
-
     async def get_all(self) -> dict[str, Any]: ...
 
 
@@ -46,11 +22,7 @@ class BehaviorConfig:
         self._cache: dict[str, dict[str, Any]] = {}
 
     async def get(self, name: str) -> dict[str, Any]:
-        """Return `<base_path>/<name>.yaml`'s contents, with overrides applied.
-
-        `name` excludes the `.yaml` extension (e.g. `"routing"`), matching
-        the key prefix (`behavior.routing.*`) overrides are looked up under.
-        """
+        """name excludes the .yaml extension (e.g. "routing"), matching the override key prefix "behavior.<name>.*"."""
         document = self._load(name)
         if self._overrides is None:
             return document
@@ -70,12 +42,7 @@ class BehaviorConfig:
         return merged
 
     def reload(self) -> None:
-        """Drop the cached parse so the next `get()` re-reads from disk.
-
-        Wired as the `on_change` callback the `watchfiles`-driven background
-        watcher calls whenever a file under `base_path` changes (§3.2 tier
-        3) -- see `core/prompts/watcher.py` and `main.py`'s lifespan.
-        """
+        """Called by watcher.py's on_change callback whenever a file under base_path changes."""
         self._cache.clear()
 
     def _load(self, name: str) -> dict[str, Any]:
@@ -101,11 +68,7 @@ class BehaviorConfig:
 
 
 def _set_dotted(target: dict[str, Any], dotted_path: str, value: Any) -> None:
-    """Set `target[a][b][...] = value` for `dotted_path == "a.b...."`.
-
-    Intermediate keys are created (as dicts) if missing, and replaced (not
-    merged) if present but not themselves a dict -- an override always wins.
-    """
+    """target[a][b][...] = value for dotted_path == "a.b....". Non-dict intermediate keys are replaced, not merged -- an override always wins."""
     *parents, leaf = dotted_path.split(".")
     node = target
     for part in parents:

@@ -1,12 +1,4 @@
-"""The slice of `core.behavior.loader.BehaviorConfig` this package needs.
-
-A local, structural `Protocol` -- not an import of `agents.chat.nodes.
-_protocols.BehaviorSource`, which describes the identical shape. `core/`
-must not depend on `agents/` (§3.1: "deps flow one way: `agents/modules ->
-core`"), even though both Protocols describe the same method and
-`core.behavior.loader.BehaviorConfig` satisfies either one automatically --
-structural typing needs no shared import for that.
-"""
+"""Duplicates agents/chat/nodes/_protocols.py's identical Protocol -- core/ must not depend on agents/, so structural typing does the sharing instead of an import."""
 
 from __future__ import annotations
 

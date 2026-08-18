@@ -1,20 +1,4 @@
-"""In-flight-generation concurrency cap (BLUEPRINT.md §3.10, §3.13).
-
-An `asyncio.Semaphore` bounding how many chat turns can be mid-generation
-(the LLM/graph work itself, not persistence or SSE tailing) at once,
-process-wide. `MAX_CONCURRENT_GENERATIONS` is generous by default (local
-dev, single process) -- tune it down for a resource-constrained
-deployment. Wired into `modules/chat/chat_stream.py::ChatStreamer._run_turn`,
-the one generator both simple- and durable-mode turns share (that method's
-own docstring: "Two producer shapes, one core generator").
-
-Lazily constructed (module-level singleton, built on first use) rather than
-at import time -- consistent with every other lazily-built singleton in
-this codebase (`agents/llm.py::_tracing_callback_handler`,
-`core/guardrails/pii.py::_load_engines`), even though an `asyncio.Semaphore`
-itself doesn't touch the network; it just avoids adding one more thing that
-has to happen correctly at import time for no benefit.
-"""
+"""Process-wide asyncio.Semaphore bounding in-flight generations; lazily built (like other module-level singletons here) rather than at import time."""
 
 from __future__ import annotations
 

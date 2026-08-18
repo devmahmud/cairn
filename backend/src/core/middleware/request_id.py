@@ -1,12 +1,4 @@
-"""Request-id middleware (BLUEPRINT.md §3.9).
-
-Pure ASGI, not `BaseHTTPMiddleware`: `BaseHTTPMiddleware` has to buffer the
-whole response to hand it to your callback, which breaks the SSE streaming
-endpoints this template exists to serve (v1's `LoggingApiRoute` re-read
-bodies and broke on streams -- §3.9). This middleware never touches the
-response body; it only rewrites headers on the outgoing
-`http.response.start` ASGI message.
-"""
+"""Pure ASGI, not BaseHTTPMiddleware -- the latter buffers the whole response, which broke SSE streaming before (v1's LoggingApiRoute re-read bodies on streams)."""
 
 from __future__ import annotations
 

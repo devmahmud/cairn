@@ -1,23 +1,4 @@
-"""HTTP surface for the auth module (BLUEPRINT.md §3.9, §8 step 7).
-
-- `POST /auth/register` -- `fastapi-users`' own bundled router (creates the
-  `User` row, hashes the password; returns `UserRead`, no token -- call
-  `/auth/login` next).
-- `POST /auth/login` -- hand-rolled (not `fastapi-users`' `get_auth_router`
-  login route): authenticates via `UserManager.authenticate` and returns a
-  `TokenPair` (access + refresh), not just the bare access token
-  `fastapi-users`' own login route returns.
-- `POST /auth/refresh` -- rotates the presented refresh token, returns a
-  fresh `TokenPair`.
-- `POST /auth/logout` -- revokes the presented refresh token.
-- `GET /auth/me` -- the authenticated `User` (via `current_active_user`,
-  §3.9's ownership-adjacent "who am I" endpoint most SPAs want).
-
-See `modules/auth/refresh_tokens.py`'s docstring for why login/refresh/
-logout are hand-rolled instead of using `fastapi-users`' bundled auth
-router: stock `fastapi-users` JWT auth has no refresh concept and its
-logout is a no-op for a stateless strategy.
-"""
+"""login/refresh/logout are hand-rolled instead of fastapi-users' bundled router -- see refresh_tokens.py for why."""
 
 from __future__ import annotations
 

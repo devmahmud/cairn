@@ -1,17 +1,9 @@
-"""Typed application exceptions (BLUEPRINT.md §3.9).
-
-Module/domain code raises these instead of a bare `HTTPException` so error
-handling is typed and centralized in `handlers.py` rather than scattered
-`try/except` blocks per router. Modules added in later scaffold steps
-subclass `AppError` for their own error cases.
-"""
+"""Raised instead of a bare HTTPException so error handling is centralized in handlers.py rather than scattered try/except blocks per router."""
 
 from __future__ import annotations
 
 
 class AppError(Exception):
-    """Base class for typed, client-facing application errors."""
-
     status_code: int = 500
     error_code: str = "internal_error"
 

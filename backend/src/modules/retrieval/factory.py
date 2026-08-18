@@ -1,17 +1,4 @@
-"""`build_retrieval_service` -- the retrieval Protocol's factory (BLUEPRINT.md §3.8).
-
-```python
-def build_retrieval_service(*, use_local: bool, rerank: bool, **kw) -> RetrievalService:
-    if use_local:
-        return LocalFixtureRetrievalService()            # boots with zero deps
-    svc = PgVectorHybridRetrievalService(**kw)            # BM25 ⊕ vector → RRF
-    return RerankedRetrieval(svc, RERANKER) if rerank else svc
-```
-
-The DI container's `retrieval_service` provider (`core/di/container.py`) is
-this function partially applied to `settings`; unit tests call it directly
-with `use_local=True` and no other kwargs to get the zero-dep fixture path.
-"""
+"""DI container's retrieval_service provider is this function partially applied to settings; unit tests call it directly with use_local=True for the zero-dep fixture path."""
 
 from __future__ import annotations
 
@@ -54,10 +41,7 @@ def build_retrieval_service(
         return hybrid
 
     if not reranker_base_url:
-        # Offline-first degrade (design principle #4): `RERANK_ENABLED=true`
-        # (the default) with no `RERANKER_BASE_URL` configured yet shouldn't
-        # crash retrieval -- serve unreranked hybrid results and say so
-        # loudly, once, rather than raising on every query.
+        # RERANK_ENABLED=true with no RERANKER_BASE_URL shouldn't crash retrieval -- serve unreranked results and warn once instead of raising every query.
         logger.warning(
             "retrieval.rerank_enabled_but_no_reranker_base_url_configured",
             hint="Set RERANKER_BASE_URL to a self-hosted bge-reranker-v2-m3 "

@@ -1,20 +1,4 @@
-"""Cross-encoder reranking behind the `RetrievalService` Protocol (BLUEPRINT.md §3.8).
-
-`RerankedRetrieval` wraps any base `RetrievalService` (in practice,
-`PgVectorHybridRetrievalService`): overfetch → score every candidate with a
-self-hosted cross-encoder (`bge-reranker-v2-m3` by default, Apache-2.0) →
-take the top-k → dedupe by `parent_id`. The reranker itself is called over
-HTTP against a Text-Embeddings-Inference/vLLM-style `/rerank` endpoint
-(`{"query", "texts"} -> [{"index", "score"}, ...]`) -- the same
-"self-hosted, `OPENAI_BASE_URL`-style swap point" pattern as `agents/llm.py`
-and `modules/embedding/service.py`, just without an OpenAI-compatible route
-for cross-encoder rerank specifically.
-
-Degrades gracefully in both directions (design principle #4): no
-`RERANKER_BASE_URL` configured, or a reachable-but-erroring reranker at
-request time, both fall back to the *unreranked* fused candidates rather
-than failing the turn -- a worse-ranked answer beats no answer.
-"""
+"""RerankedRetrieval wraps a base RetrievalService with cross-encoder reranking; degrades to unreranked results (never fails the turn) if no reranker is configured or reachable."""
 
 from __future__ import annotations
 
@@ -27,9 +11,7 @@ from modules.retrieval.protocol import RetrievalDoc, RetrievalService
 
 logger = structlog.get_logger(__name__)
 
-# "top-k → dedupe by parent_id" (§3.8): overfetch this many candidates from
-# the base service before scoring, so the reranker sees more than exactly
-# `top_k` and dedup doesn't starve the final result set.
+# Overfetch beyond top_k so dedup by parent_id doesn't starve the final result set.
 DEFAULT_RERANK_OVERFETCH_MULTIPLIER = 3.0
 DEFAULT_RERANK_TIMEOUT_SECONDS = 10.0
 
@@ -105,13 +87,7 @@ class RerankedRetrieval:
         reranked = sorted(
             zip(candidates, scores, strict=True), key=lambda pair: pair[1], reverse=True
         )
-        # Overwrites the inner service's score *and* marks it calibrated --
-        # this is now a real cross-encoder relevance score in ~[0, 1], not
-        # whatever rank-fusion artifact the wrapped service produced
-        # (§3.8, `RetrievalDoc.score_is_calibrated`'s docstring). The
-        # `except` branch above returns `candidates` unmodified, so a
-        # reranker-unavailable fallback correctly keeps reporting
-        # `score_is_calibrated=False` if the inner service does.
+        # Marks calibrated=True: this is now a real cross-encoder score in ~[0, 1], not the inner service's rank-fusion artifact.
         top = [
             doc.model_copy(update={"score": score, "score_is_calibrated": True})
             for doc, score in reranked[:top_k]
@@ -120,8 +96,7 @@ class RerankedRetrieval:
 
 
 def _dedupe_by_parent(docs: list[RetrievalDoc]) -> list[RetrievalDoc]:
-    """Keep the first (highest-scored) chunk per `parent_id`; keep every
-    chunk with no `parent_id` (nothing to dedupe it against)."""
+    """Keeps the first chunk per parent_id -- callers must pass docs pre-sorted by priority."""
     seen_parents: set[str] = set()
     deduped: list[RetrievalDoc] = []
     for doc in docs:
