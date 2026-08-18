@@ -10,9 +10,9 @@ export interface DebugTrace {
 
 export function DebugPanel({ trace }: { trace: DebugTrace }) {
   return (
-    <details className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-      <summary className="cursor-pointer select-none font-medium">Trace</summary>
-      <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
+    <details className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+      <summary className="cursor-pointer text-foreground/70 font-medium select-none">Trace</summary>
+      <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 font-mono">
         <dt>phase</dt>
         <dd>{trace.phase}</dd>
         <dt>agent</dt>
@@ -22,14 +22,16 @@ export function DebugPanel({ trace }: { trace: DebugTrace }) {
           {trace.decision ? (
             <span className="inline-flex items-center gap-1.5">
               {trace.decision.intent}
-              <Badge variant="outline">{trace.decision.confidence.toFixed(2)}</Badge>
+              <Badge variant="outline" className="font-mono">
+                {trace.decision.confidence.toFixed(2)}
+              </Badge>
             </span>
           ) : (
             "—"
           )}
         </dd>
         <dt>stream id</dt>
-        <dd className="font-mono">{trace.streamId ?? "—"}</dd>
+        <dd>{trace.streamId ?? "—"}</dd>
       </dl>
     </details>
   );

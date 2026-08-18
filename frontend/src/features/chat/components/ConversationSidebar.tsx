@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
 import {
@@ -12,6 +12,7 @@ import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { Button } from "@/shared/components/ui/button";
 import { ScrollArea } from "@/shared/components/ui/scroll-area";
 import { Separator } from "@/shared/components/ui/separator";
+import { Wordmark } from "@/shared/components/Wordmark";
 import { cn } from "@/shared/lib/utils";
 import type { components } from "@/shared/types/api";
 
@@ -104,7 +105,7 @@ function ConversationRow({
           onKeyDown={handleInputKeyDown}
           onBlur={handleInputBlur}
           aria-label="Conversation title"
-          className="h-7 w-full rounded border border-input bg-background px-1.5 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="h-7 w-full rounded-md border border-input bg-background px-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/80"
         />
       </div>
     );
@@ -112,7 +113,7 @@ function ConversationRow({
 
   if (confirmingDelete) {
     return (
-      <div className="flex items-center gap-1 px-2 py-1.5 text-xs">
+      <div className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs">
         <span className="flex-1 truncate text-muted-foreground">Delete this conversation?</span>
         <button
           type="button"
@@ -135,11 +136,14 @@ function ConversationRow({
 
   return (
     <div className="group/row relative">
+      {isActive ? (
+        <span className="absolute top-1.5 bottom-1.5 left-0 w-0.5 rounded-full bg-lichen" aria-hidden="true" />
+      ) : null}
       <Link
         to={`/chat/${conversation.id}`}
         className={cn(
-          "block truncate rounded-md px-2 py-1.5 pr-14 text-sm hover:bg-accent hover:text-accent-foreground",
-          isActive && "bg-accent text-accent-foreground",
+          "block truncate rounded-md px-2.5 py-1.5 pr-14 text-sm text-foreground/85 hover:bg-accent hover:text-accent-foreground",
+          isActive && "bg-accent font-medium text-accent-foreground",
         )}
       >
         {conversation.title ?? "Untitled conversation"}
@@ -166,7 +170,15 @@ function ConversationRow({
   );
 }
 
-export function ConversationSidebar({ activeConversationId }: { activeConversationId: string | null }) {
+export function ConversationSidebar({
+  activeConversationId,
+  open = true,
+  onClose,
+}: {
+  activeConversationId: string | null;
+  open?: boolean;
+  onClose?: () => void;
+}) {
   const navigate = useNavigate();
   const { data, isLoading } = useConversations();
   const createConversation = useCreateConversation();
@@ -176,46 +188,72 @@ export function ConversationSidebar({ activeConversationId }: { activeConversati
   async function handleCreate(): Promise<void> {
     const conversation = await createConversation.mutateAsync(undefined);
     navigate(`/chat/${conversation.id}`);
+    onClose?.();
   }
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r bg-muted/20">
-      <div className="p-3">
-        <Button
-          type="button"
-          variant="secondary"
-          className="w-full justify-start gap-2"
-          onClick={() => void handleCreate()}
-          disabled={createConversation.isPending}
-        >
-          <Plus className="size-4" />
-          New conversation
-        </Button>
-      </div>
-      <Separator />
-      <ScrollArea className="flex-1" viewportClassName="p-2">
-        <nav className="flex flex-col gap-1" aria-label="Conversations">
-          {isLoading ? <p className="px-2 py-1 text-xs text-muted-foreground">Loading…</p> : null}
-          {data?.items.map((conversation) => (
-            <ConversationRow
-              key={conversation.id}
-              conversation={conversation}
-              isActive={conversation.id === activeConversationId}
-              onDeletedActive={() => navigate("/chat")}
-            />
-          ))}
-          {data && data.items.length === 0 ? (
-            <p className="px-2 py-1 text-xs text-muted-foreground">No conversations yet.</p>
-          ) : null}
-        </nav>
-      </ScrollArea>
-      <Separator />
-      <div className="flex items-center justify-between p-3 text-xs text-muted-foreground">
-        <span className="truncate">{user?.email}</span>
-        <Button type="button" variant="ghost" size="sm" onClick={() => void logout()}>
-          Sign out
-        </Button>
-      </div>
-    </aside>
+    <>
+      {open ? (
+        <div
+          className="fixed inset-0 z-40 bg-foreground/30 sm:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      ) : null}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 flex w-72 shrink-0 flex-col border-r bg-muted/40 transition-transform duration-200 ease-out",
+          "sm:static sm:z-auto sm:w-64 sm:translate-x-0 sm:transition-none",
+          open ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
+        <div className="flex items-center justify-between p-3 pb-2">
+          <Wordmark />
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close conversations"
+            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground sm:hidden"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="px-3 pb-3">
+          <Button
+            type="button"
+            className="w-full justify-start gap-2"
+            onClick={() => void handleCreate()}
+            disabled={createConversation.isPending}
+          >
+            <Plus className="size-4" />
+            New conversation
+          </Button>
+        </div>
+        <Separator />
+        <ScrollArea className="flex-1" viewportClassName="p-2">
+          <nav className="flex flex-col gap-1" aria-label="Conversations">
+            {isLoading ? <p className="px-2 py-1 text-xs text-muted-foreground">Loading…</p> : null}
+            {data?.items.map((conversation) => (
+              <ConversationRow
+                key={conversation.id}
+                conversation={conversation}
+                isActive={conversation.id === activeConversationId}
+                onDeletedActive={() => navigate("/chat")}
+              />
+            ))}
+            {data && data.items.length === 0 ? (
+              <p className="px-2 py-1 text-xs text-muted-foreground">No conversations yet.</p>
+            ) : null}
+          </nav>
+        </ScrollArea>
+        <Separator />
+        <div className="flex items-center justify-between p-3 text-xs text-muted-foreground">
+          <span className="truncate">{user?.email}</span>
+          <Button type="button" variant="ghost" size="sm" onClick={() => void logout()}>
+            Sign out
+          </Button>
+        </div>
+      </aside>
+    </>
   );
 }

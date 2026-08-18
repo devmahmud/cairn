@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router";
 import { Button } from "@/shared/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card";
 import { Input } from "@/shared/components/ui/input";
+import { Wordmark } from "@/shared/components/Wordmark";
 import { useAuthStore } from "@/features/auth/stores/auth-store";
 
 interface AuthFormProps {
@@ -36,76 +37,81 @@ export function AuthForm({ mode }: AuthFormProps) {
 
   return (
     <div className="flex min-h-dvh items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="text-lg">{mode === "login" ? "Sign in" : "Create an account"}</CardTitle>
-          <CardDescription>
-            {mode === "login" ? "Welcome back to Cairn." : "Start a durable, streaming chat session."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="email" className="text-sm font-medium">
-                Email
-              </label>
-              <Input
-                id="email"
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => {
-                  setEmail(e.target.value);
-                  if (error) clearError();
-                }}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="password" className="text-sm font-medium">
-                Password
-              </label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete={mode === "login" ? "current-password" : "new-password"}
-                required
-                minLength={8}
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  if (error) clearError();
-                }}
-              />
-            </div>
-            {error ? (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            ) : null}
-            <Button type="submit" disabled={busy}>
-              {busy ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
-            </Button>
-          </form>
-          <p className="mt-4 text-center text-sm text-muted-foreground">
-            {mode === "login" ? (
-              <>
-                Need an account?{" "}
-                <Link to="/register" className="text-foreground underline underline-offset-4">
-                  Register
-                </Link>
-              </>
-            ) : (
-              <>
-                Already have an account?{" "}
-                <Link to="/login" className="text-foreground underline underline-offset-4">
-                  Sign in
-                </Link>
-              </>
-            )}
-          </p>
-        </CardContent>
-      </Card>
+      <div className="flex w-full max-w-sm flex-col items-center gap-6">
+        <Wordmark size="lg" />
+        <Card className="w-full">
+          <CardHeader>
+            <CardTitle className="font-display text-lg font-semibold">
+              {mode === "login" ? "Sign in" : "Create an account"}
+            </CardTitle>
+            <CardDescription>
+              {mode === "login" ? "Welcome back." : "Start a durable, streaming chat session."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="email" className="text-sm font-medium">
+                  Email
+                </label>
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (error) clearError();
+                  }}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="password" className="text-sm font-medium">
+                  Password
+                </label>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete={mode === "login" ? "current-password" : "new-password"}
+                  required
+                  minLength={8}
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (error) clearError();
+                  }}
+                />
+              </div>
+              {error ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {error}
+                </p>
+              ) : null}
+              <Button type="submit" disabled={busy}>
+                {busy ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
+              </Button>
+            </form>
+            <p className="mt-4 text-center text-sm text-muted-foreground">
+              {mode === "login" ? (
+                <>
+                  Need an account?{" "}
+                  <Link to="/register" className="font-medium text-primary underline-offset-4 hover:underline">
+                    Register
+                  </Link>
+                </>
+              ) : (
+                <>
+                  Already have an account?{" "}
+                  <Link to="/login" className="font-medium text-primary underline-offset-4 hover:underline">
+                    Sign in
+                  </Link>
+                </>
+              )}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

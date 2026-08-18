@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 
 import { MessageBubble } from "@/features/chat/components/MessageBubble";
+import { StoneStack } from "@/features/chat/components/StoneStack";
+import { ThinkingIndicator } from "@/features/chat/components/ThinkingIndicator";
 import {
   fromCompletedTurn,
   fromMessageRead,
@@ -27,6 +29,7 @@ export function MessageList({
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const completedTurns = useChatStore((s) => s.completedTurns);
+  const reducedMotion = useChatStore((s) => s.reducedMotion);
 
   const persisted: ChatMessageVM[] = history.map(fromMessageRead);
   const sessionTurns: ChatMessageVM[] = completedTurns.map(fromCompletedTurn);
@@ -39,7 +42,12 @@ export function MessageList({
 
   return (
     <ScrollArea ref={viewportRef} className="flex-1" viewportClassName="px-4 py-4">
-      <div role="log" aria-live="polite" aria-relevant="additions text" className="flex flex-col gap-4">
+      <div
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        className="flex min-h-full flex-col gap-4"
+      >
         {persisted.map((message) => (
           <MessageBubble key={message.id} {...message} />
         ))}
@@ -51,7 +59,7 @@ export function MessageList({
             <MessageBubble role="user" content={activeTurn.userText} />
             {activeTurn.guardrail ? <GuardrailBanner guardrail={activeTurn.guardrail} /> : null}
             {statusLabel ? (
-              <p className="pl-11 text-xs text-muted-foreground">{statusLabel}</p>
+              <ThinkingIndicator label={statusLabel} reducedMotion={reducedMotion} className="pl-11" />
             ) : (
               <MessageBubble
                 role="assistant"
@@ -59,14 +67,19 @@ export function MessageList({
                 citations={activeTurn.citations}
                 toolResults={activeTurn.releasedToolResults}
                 pending
+                reducedMotion={reducedMotion}
               />
             )}
           </>
         ) : null}
         {persisted.length === 0 && sessionTurns.length === 0 && !activeTurn ? (
-          <p className="pt-8 text-center text-sm text-muted-foreground">
-            Send a message to start the conversation.
-          </p>
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 py-8 text-center">
+            <StoneStack size="lg" animate={!reducedMotion} />
+            <div className="flex flex-col gap-1">
+              <p className="font-display text-base font-semibold text-foreground">Start the conversation</p>
+              <p className="text-sm text-muted-foreground">Send a message below to begin.</p>
+            </div>
+          </div>
         ) : null}
       </div>
     </ScrollArea>

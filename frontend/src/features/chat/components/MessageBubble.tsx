@@ -1,6 +1,7 @@
 import { Bot, User } from "lucide-react";
 
 import { MarkdownContent } from "@/features/chat/components/MarkdownContent";
+import { ThinkingIndicator } from "@/features/chat/components/ThinkingIndicator";
 import { ToolArtifactCard } from "@/features/tool-artifact";
 import { Avatar, AvatarFallback } from "@/shared/components/ui/avatar";
 import { Tooltip } from "@/shared/components/ui/tooltip";
@@ -18,7 +19,7 @@ function CitationChip({ citation }: { citation: Citation }) {
         </span>
       }
     >
-      <span className="inline-flex size-5 items-center justify-center rounded-full border bg-muted text-[10px] font-medium hover:bg-accent">
+      <span className="inline-flex size-5 items-center justify-center rounded-full border bg-muted font-mono text-[10px] font-medium hover:bg-accent">
         {citation.index}
       </span>
     </Tooltip>
@@ -31,10 +32,19 @@ export interface MessageBubbleProps {
   citations?: Citation[];
   toolResults?: ToolResultEvent[];
   pending?: boolean;
+  reducedMotion?: boolean;
 }
 
-export function MessageBubble({ role, content, citations = [], toolResults = [], pending }: MessageBubbleProps) {
+export function MessageBubble({
+  role,
+  content,
+  citations = [],
+  toolResults = [],
+  pending,
+  reducedMotion,
+}: MessageBubbleProps) {
   const isUser = role === "user";
+  const thinking = pending && content.length === 0;
 
   return (
     <div
@@ -43,17 +53,27 @@ export function MessageBubble({ role, content, citations = [], toolResults = [],
       data-pending={pending ? "true" : undefined}
     >
       <Avatar>
-        <AvatarFallback>{isUser ? <User className="size-4" /> : <Bot className="size-4" />}</AvatarFallback>
+        <AvatarFallback className={isUser ? "bg-primary text-primary-foreground" : undefined}>
+          {isUser ? <User className="size-4" /> : <Bot className="size-4" />}
+        </AvatarFallback>
       </Avatar>
       <div className={cn("flex max-w-[75%] flex-col gap-2", isUser && "items-end")}>
         <div
           className={cn(
-            "rounded-lg px-3 py-2 text-sm",
-            isUser ? "bg-primary text-primary-foreground whitespace-pre-wrap" : "bg-muted text-foreground",
+            "rounded-2xl px-3.5 py-2.5 text-[0.9375rem] leading-relaxed",
+            isUser
+              ? "rounded-br-sm bg-primary text-primary-foreground whitespace-pre-wrap"
+              : "rounded-bl-sm border border-border/60 bg-card text-card-foreground",
           )}
         >
-          {isUser ? content : <MarkdownContent content={content} />}
-          {pending ? (
+          {thinking ? (
+            <ThinkingIndicator reducedMotion={reducedMotion} />
+          ) : isUser ? (
+            content
+          ) : (
+            <MarkdownContent content={content} />
+          )}
+          {pending && !thinking ? (
             <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-current align-text-bottom" />
           ) : null}
         </div>

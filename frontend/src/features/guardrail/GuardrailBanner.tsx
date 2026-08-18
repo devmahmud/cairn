@@ -15,7 +15,7 @@ export function GuardrailBanner({ guardrail }: { guardrail: GuardrailEvent }) {
         "flex items-start gap-2 rounded-md border px-3 py-2 text-sm",
         isRefusal
           ? "border-destructive/30 bg-destructive/10 text-destructive"
-          : "border-warning/30 bg-warning/10 text-warning-foreground",
+          : "border-warning/30 bg-warning/10 text-warning",
       )}
     >
       {isRefusal ? (

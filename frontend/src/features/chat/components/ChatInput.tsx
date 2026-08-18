@@ -37,21 +37,29 @@ export function ChatInput({ disabled, streaming, onSend, onStop }: ChatInputProp
         placeholder="Send a message…"
         disabled={disabled}
         aria-label="Message"
-        className="max-h-40"
+        className="max-h-40 rounded-xl"
       />
       {streaming ? (
-        <Button type="button" variant="secondary" size="icon" onClick={onStop} aria-label="Stop generating">
-          <Square />
+        <Button
+          type="button"
+          variant="secondary"
+          size="icon"
+          className="rounded-full"
+          onClick={onStop}
+          aria-label="Stop generating"
+        >
+          <Square className="size-4" />
         </Button>
       ) : (
         <Button
           type="button"
           size="icon"
+          className="rounded-full"
           onClick={submit}
           disabled={disabled || value.trim().length === 0}
           aria-label="Send message"
         >
-          <Send />
+          <Send className="size-4" />
         </Button>
       )}
     </div>
