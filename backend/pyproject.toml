@@ -29,6 +29,7 @@ dependencies = [
     "structlog>=26.1.0",
     "tiktoken>=0.13.0",
     "watchfiles>=1.2.0",
+    "cryptography>=50.0.0",
 ]
 
 [dependency-groups]
