@@ -192,6 +192,23 @@ export async function createConversation(payload: {
   return parseJson(response);
 }
 
+export async function updateConversation(
+  conversationId: string,
+  payload: components["schemas"]["ConversationUpdate"],
+): Promise<components["schemas"]["ConversationRead"]> {
+  const response = await authorizedFetch(`/conversations/${conversationId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJson(response);
+}
+
+export async function deleteConversation(conversationId: string): Promise<void> {
+  const response = await authorizedFetch(`/conversations/${conversationId}`, { method: "DELETE" });
+  if (!response.ok) await throwForStatus(response);
+}
+
 export async function listMessages(
   conversationId: string,
   params: { cursor?: string | null; limit?: number } = {},

@@ -1,5 +1,6 @@
 import { Bot, User } from "lucide-react";
 
+import { MarkdownContent } from "@/features/chat/components/MarkdownContent";
 import { ToolArtifactCard } from "@/features/tool-artifact";
 import { Avatar, AvatarFallback } from "@/shared/components/ui/avatar";
 import { Tooltip } from "@/shared/components/ui/tooltip";
@@ -47,11 +48,11 @@ export function MessageBubble({ role, content, citations = [], toolResults = [],
       <div className={cn("flex max-w-[75%] flex-col gap-2", isUser && "items-end")}>
         <div
           className={cn(
-            "rounded-lg px-3 py-2 text-sm whitespace-pre-wrap",
-            isUser ? "bg-primary text-primary-foreground" : "bg-muted text-foreground",
+            "rounded-lg px-3 py-2 text-sm",
+            isUser ? "bg-primary text-primary-foreground whitespace-pre-wrap" : "bg-muted text-foreground",
           )}
         >
-          {content}
+          {isUser ? content : <MarkdownContent content={content} />}
           {pending ? (
             <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-current align-text-bottom" />
           ) : null}

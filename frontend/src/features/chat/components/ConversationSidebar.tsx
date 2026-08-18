@@ -1,12 +1,170 @@
-import { Plus } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
-import { useConversations, useCreateConversation } from "@/features/chat/hooks/use-conversations";
+import {
+  useConversations,
+  useCreateConversation,
+  useDeleteConversation,
+  useRenameConversation,
+} from "@/features/chat/hooks/use-conversations";
 import { useAuthStore } from "@/features/auth/stores/auth-store";
 import { Button } from "@/shared/components/ui/button";
 import { ScrollArea } from "@/shared/components/ui/scroll-area";
 import { Separator } from "@/shared/components/ui/separator";
 import { cn } from "@/shared/lib/utils";
+import type { components } from "@/shared/types/api";
+
+type ConversationRead = components["schemas"]["ConversationRead"];
+
+function ConversationRow({
+  conversation,
+  isActive,
+  onDeletedActive,
+}: {
+  conversation: ConversationRead;
+  isActive: boolean;
+  onDeletedActive: () => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(conversation.title ?? "");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const skipBlurSaveRef = useRef(false);
+  const renameConversation = useRenameConversation();
+  const deleteConversation = useDeleteConversation();
+
+  useEffect(() => {
+    if (isEditing) inputRef.current?.select();
+  }, [isEditing]);
+
+  function startEditing(event: React.MouseEvent): void {
+    event.preventDefault();
+    setTitleDraft(conversation.title ?? "");
+    setIsEditing(true);
+  }
+
+  function commitEdit(): void {
+    setIsEditing(false);
+    const trimmed = titleDraft.trim();
+    if (!trimmed || trimmed === (conversation.title ?? "")) return;
+    renameConversation.mutate({ conversationId: conversation.id, title: trimmed });
+  }
+
+  function cancelEdit(): void {
+    skipBlurSaveRef.current = true;
+    setIsEditing(false);
+  }
+
+  function handleInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitEdit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEdit();
+    }
+  }
+
+  function handleInputBlur(): void {
+    if (skipBlurSaveRef.current) {
+      skipBlurSaveRef.current = false;
+      return;
+    }
+    commitEdit();
+  }
+
+  function requestDelete(event: React.MouseEvent): void {
+    event.preventDefault();
+    setConfirmingDelete(true);
+  }
+
+  function cancelDelete(event: React.MouseEvent): void {
+    event.preventDefault();
+    setConfirmingDelete(false);
+  }
+
+  function confirmDelete(event: React.MouseEvent): void {
+    event.preventDefault();
+    deleteConversation.mutate(conversation.id, {
+      onSuccess: () => {
+        if (isActive) onDeletedActive();
+      },
+    });
+  }
+
+  if (isEditing) {
+    return (
+      <div className="px-1 py-0.5">
+        <input
+          ref={inputRef}
+          autoFocus
+          value={titleDraft}
+          onChange={(event) => setTitleDraft(event.target.value)}
+          onKeyDown={handleInputKeyDown}
+          onBlur={handleInputBlur}
+          aria-label="Conversation title"
+          className="h-7 w-full rounded border border-input bg-background px-1.5 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
+      </div>
+    );
+  }
+
+  if (confirmingDelete) {
+    return (
+      <div className="flex items-center gap-1 px-2 py-1.5 text-xs">
+        <span className="flex-1 truncate text-muted-foreground">Delete this conversation?</span>
+        <button
+          type="button"
+          onClick={confirmDelete}
+          disabled={deleteConversation.isPending}
+          className="shrink-0 rounded px-1.5 py-0.5 font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
+        >
+          Delete
+        </button>
+        <button
+          type="button"
+          onClick={cancelDelete}
+          className="shrink-0 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-accent"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="group/row relative">
+      <Link
+        to={`/chat/${conversation.id}`}
+        className={cn(
+          "block truncate rounded-md px-2 py-1.5 pr-14 text-sm hover:bg-accent hover:text-accent-foreground",
+          isActive && "bg-accent text-accent-foreground",
+        )}
+      >
+        {conversation.title ?? "Untitled conversation"}
+      </Link>
+      <div className="absolute inset-y-0 right-1 flex items-center gap-0.5 opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 [@media(hover:none)]:opacity-100">
+        <button
+          type="button"
+          onClick={startEditing}
+          aria-label="Rename conversation"
+          className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+        >
+          <Pencil className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={requestDelete}
+          aria-label="Delete conversation"
+          className="rounded p-1 text-muted-foreground hover:bg-background hover:text-destructive"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function ConversationSidebar({ activeConversationId }: { activeConversationId: string | null }) {
   const navigate = useNavigate();
@@ -39,16 +197,12 @@ export function ConversationSidebar({ activeConversationId }: { activeConversati
         <nav className="flex flex-col gap-1" aria-label="Conversations">
           {isLoading ? <p className="px-2 py-1 text-xs text-muted-foreground">Loading…</p> : null}
           {data?.items.map((conversation) => (
-            <Link
+            <ConversationRow
               key={conversation.id}
-              to={`/chat/${conversation.id}`}
-              className={cn(
-                "truncate rounded-md px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground",
-                conversation.id === activeConversationId && "bg-accent text-accent-foreground",
-              )}
-            >
-              {conversation.title ?? "Untitled conversation"}
-            </Link>
+              conversation={conversation}
+              isActive={conversation.id === activeConversationId}
+              onDeletedActive={() => navigate("/chat")}
+            />
           ))}
           {data && data.items.length === 0 ? (
             <p className="px-2 py-1 text-xs text-muted-foreground">No conversations yet.</p>
