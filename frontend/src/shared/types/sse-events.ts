@@ -1,15 +1,4 @@
-// Cairn frontend — SSE event types (BLUEPRINT.md §4.1, §4.3, §8 step 8).
-//
-// A thin, hand-written wrapper over `./api.ts` (the one file
-// `pnpm run contract` regenerates, §4.3) -- not a second generated file and
-// not a hand-maintained duplicate of the backend's shapes. `ChatSSEEvent`
-// here is a re-export of `components["schemas"]["ChatSSEEvent"]`, the exact
-// discriminated union `modules/chat/sse.py::register_sse_schema` merges into
-// `/openapi.json` -- redefining these fields by hand anywhere in the
-// frontend would be the one thing contract-first streaming (§4.3) exists to
-// prevent. Widen the union here, in one place, if a client fork ever adds an
-// event type via an `examples/` pack + its own OpenAPI registration.
-
+// Re-exports from the generated ./api.ts -- don't hand-duplicate these shapes.
 import type { components } from "./api";
 
 export type ChatSSEEvent = components["schemas"]["ChatSSEEvent"];

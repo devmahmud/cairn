@@ -1,10 +1,3 @@
-// Cairn frontend — the message transcript (BLUEPRINT.md §4.2, §8 step 8).
-//
-// `aria-live="polite"` on the scroll region (a11y requirement, §4.2): screen
-// readers announce new content as it streams in without interrupting
-// whatever the user is doing, the same contract a chat/notification region
-// is expected to honor.
-
 import { useEffect, useRef } from "react";
 
 import { MessageBubble } from "@/features/chat/components/MessageBubble";

@@ -1,18 +1,3 @@
-// Cairn frontend — REST client (BLUEPRINT.md §4.1, §4.3, §8 step 8).
-//
-// Hand-written, not `openapi-fetch` -- `openapi-typescript` (the one
-// contract-sync dependency this template takes, §4.3) generates *types*
-// only; this file is the thin fetch wrapper that pairs `components["schemas"]`
-// from the generated `shared/types/api.ts` with real request/response
-// handling, kept intentionally small rather than pulling in a second
-// generated-client dependency.
-//
-// `authorizedFetch` is the one place a `401` triggers a single
-// refresh-and-retry against `POST /auth/refresh` (via the `AuthSession` seam
-// in `./auth-session.ts`, not a direct store import -- that file's own
-// docstring explains why); concurrent `401`s coalesce onto one in-flight
-// refresh instead of each firing their own.
-
 import { getAuthSession } from "./auth-session";
 import { API_BASE_URL } from "./config";
 import type { components } from "@/shared/types/api";
@@ -139,8 +124,7 @@ export async function logout(refreshToken: string): Promise<void> {
 
 let refreshInFlight: Promise<boolean> | null = null;
 
-/** One refresh attempt, shared by every concurrent 401 (module-level, not
- * per-call) -- returns whether a new access token is now available. */
+// Module-level, so concurrent 401s coalesce onto one in-flight refresh instead of each firing their own.
 function refreshOnce(): Promise<boolean> {
   refreshInFlight ??= (async () => {
     const session = getAuthSession();
@@ -160,11 +144,7 @@ function refreshOnce(): Promise<boolean> {
   return refreshInFlight;
 }
 
-/** Attaches `Authorization: Bearer <token>`; on a `401`, refreshes once
- * (coalesced across concurrent callers) and retries the request exactly
- * once with the new token. Returns the raw `Response` either way -- callers
- * that need JSON call `parseJson` themselves; the SSE endpoints
- * (`startChatTurn`/`resumeChatStream`) consume the body directly instead. */
+// On a 401, refreshes once and retries the request exactly once with the new token.
 export async function authorizedFetch(
   path: string,
   init: RequestInit & { query?: Record<string, string | number | undefined | null> } = {},

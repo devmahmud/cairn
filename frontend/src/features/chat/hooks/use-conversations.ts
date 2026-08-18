@@ -1,8 +1,3 @@
-// Cairn frontend — server-state hooks (BLUEPRINT.md §4.3, §8 step 8).
-//
-// "Server-state (conversation list/history) is better as TanStack Query than
-// a Zustand store" -- `stores/chat-store.ts` only ever holds the live turn.
-
 import { useCallback } from "react";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -32,10 +27,7 @@ export function useCreateConversation() {
   });
 }
 
-/** `list_for_conversation` (`backend/src/modules/conversations/repository.py`)
- * pages newest-first (keyset pagination, §3.3) -- reversed here so
- * `MessageList` can render top-to-bottom chronological without knowing
- * that's a REST convention, not a chat-transcript one. */
+// The API pages newest-first; reversed here so MessageList can render top-to-bottom chronological.
 export function useMessages(conversationId: string | null) {
   return useQuery({
     queryKey: conversationId ? messagesKey(conversationId) : (["conversations", "none"] as const),
@@ -47,12 +39,6 @@ export function useMessages(conversationId: string | null) {
   });
 }
 
-/** Marks a conversation's message history stale so the next time it's
- * observed (a fresh mount -- e.g. navigating back to it, §4.1) it refetches
- * from Postgres instead of serving the `staleTime: Infinity` cache verbatim.
- * `useCallback`-wrapped so this is safe to put in an effect's dependency
- * array (`ChatContainer`'s conversation-switch effect) without churning it
- * every render -- `queryClient` itself is a stable reference from context. */
 export function useInvalidateMessages(): (conversationId: string) => Promise<void> {
   const queryClient = useQueryClient();
   return useCallback(

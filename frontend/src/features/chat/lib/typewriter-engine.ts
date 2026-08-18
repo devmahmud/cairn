@@ -1,26 +1,3 @@
-// Cairn frontend — the typewriter buffer (BLUEPRINT.md §4.2, §8 step 8).
-//
-// Framework-agnostic (no React/Zustand here -- `stores/chat-store.ts` is the
-// one place this gets wired to state updates). Drains an ordered queue of
-// text chunks and artifact markers at a target chars/sec, rAF-driven:
-//
-// - **Latency-bounded**: once the undelivered backlog exceeds `maxLagChars`,
-//   the per-tick reveal budget grows by the overage, so a burst of tokens
-//   can't leave the visible text arbitrarily far behind the network.
-// - **Visibility-aware**: `document.hidden` (checked at push-time, at tick
-//   time, and reactively via a `visibilitychange` listener -- rAF callbacks
-//   are throttled or fully paused in background tabs, so *only* checking
-//   inside `tick` would miss a tab that goes hidden between one scheduled
-//   frame and the next) bypasses the metered loop entirely: everything
-//   queued is flushed synchronously, and every push after that is emitted
-//   immediately rather than enqueued, until the tab is visible again.
-// - **Ordered artifact deferral**: an artifact marker only reaches the front
-//   of the queue once every text chunk queued ahead of it has been fully
-//   revealed -- "hold a `tool_result` card until its parent text finishes
-//   typing" falls out of plain FIFO queue order, no separate bookkeeping.
-// - **`prefers-reduced-motion`**: same bypass path as a hidden tab -- render
-//   immediately, no animation.
-
 export interface TypewriterOptions {
   charsPerSecond?: number;
   maxLagChars?: number;
@@ -39,12 +16,7 @@ const DEFAULT_CPS = 45;
 const DEFAULT_MAX_LAG_CHARS = 240;
 const DEFAULT_FRAME_MS = 16;
 
-// Resolved *per call*, not cached at module load: a test suite installs fake
-// timers (`vi.useFakeTimers({ toFake: ["requestAnimationFrame", ...] })`)
-// well after this module is first imported, which replaces
-// `globalThis.requestAnimationFrame` -- binding to the real one up front
-// here would silently keep scheduling against a clock the fake-timer API
-// never advances.
+// Resolved per call, not cached at module load, so tests installing fake timers after import still take effect.
 function raf(cb: (time: number) => void): number {
   if (typeof requestAnimationFrame === "function") return requestAnimationFrame(cb);
   return setTimeout(() => cb(performance.now()), DEFAULT_FRAME_MS) as unknown as number;
@@ -69,6 +41,7 @@ export class TypewriterEngine {
   private readonly cps: number;
   private readonly maxLagChars: number;
   private readonly callbacks: TypewriterCallbacks;
+  // Also checked at push/tick time -- rAF is throttled in background tabs, so this listener alone could lag a beat.
   private readonly handleVisibilityChange = (): void => {
     if (isHidden()) this.flushAll();
   };
@@ -107,9 +80,6 @@ export class TypewriterEngine {
     this.ensureScheduled();
   }
 
-  /** Everything still queued is emitted immediately, in order -- used when a
-   * turn ends so the visible transcript always converges on the final text,
-   * however far typing had gotten. */
   finalize(): void {
     this.flushAll();
   }
@@ -164,10 +134,7 @@ export class TypewriterEngine {
     this.carry = budget - Math.floor(budget);
     let charsToReveal = Math.floor(budget);
 
-    // Artifacts drain for free whenever they reach the front -- only text
-    // consumption is metered against `charsToReveal`, so a tick with zero
-    // character budget left can still release an artifact queued right
-    // after the text that just finished revealing.
+    // Artifacts drain for free at the front of the queue -- only text is metered against charsToReveal.
     while (this.queue.length > 0) {
       const front = this.queue[0];
       if (!front) break;

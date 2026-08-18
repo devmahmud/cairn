@@ -52,9 +52,6 @@ describe("TypewriterEngine", () => {
     engine.pushArtifact("artifact-1");
     engine.pushText("def");
 
-    // Advance just enough frames to reveal "abc" -- the artifact (queued
-    // right after it) releases for free the moment it reaches the front,
-    // same tick "abc" finishes, without waiting on any "def" budget.
     while (released.length === 0) flushRAF(1);
     expect(visible).toBe("abc");
     expect(released).toEqual(["artifact-1"]);

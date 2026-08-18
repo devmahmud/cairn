@@ -1,8 +1,3 @@
-// Cairn frontend — the chat feature's top-level view (BLUEPRINT.md §4.1,
-// §4.2, §8 step 8). Wires the streaming hook, the feature store, and
-// TanStack Query's persisted history together; everything else in this
-// feature is a presentational consumer of what this component assembles.
-
 import { useEffect } from "react";
 import { useParams } from "react-router";
 
@@ -41,22 +36,7 @@ export function ChatContainer() {
 
   useEffect(() => {
     resetForConversation();
-    // Cleanup runs with the *previous* render's `conversationId`, right
-    // before this effect re-runs for a new one (or on unmount) -- i.e.
-    // exactly when we're navigating away from a conversation, and its
-    // `useMessages` query observer has already gone inactive (§4.3:
-    // completed turns before now live only in `completedTurns`, a
-    // client-only store `resetForConversation` above just wiped -- see
-    // `chat-store.ts`'s module docstring). Marking the REST cache stale
-    // here, not on every `message_end`, avoids racing `_persist_reply`
-    // (which commits *after* the SSE stream already finished) and avoids
-    // an unnecessary refetch while still viewing the conversation, since
-    // `completedTurns` already renders the just-finished turn locally.
-    // Invalidating an inactive query only marks it stale (no immediate
-    // network call); the next mount that observes it will refetch, so a
-    // conversation revisited within `gcTime` shows the full transcript
-    // instead of the pre-turn snapshot the `staleTime: Infinity` cache
-    // would otherwise still be serving.
+    // Invalidate on cleanup (navigating away), not on message_end -- avoids racing the backend's post-stream persist commit.
     return () => {
       if (conversationId) void invalidateMessages(conversationId);
     };

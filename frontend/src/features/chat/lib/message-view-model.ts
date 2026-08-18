@@ -1,17 +1,3 @@
-// Cairn frontend — history/live-turn view-model normalization (BLUEPRINT.md
-// §8 step 8).
-//
-// `MessageRead.citations` (`shared/types/api.ts`) is untyped JSONB -- it's
-// the *raw* graph-state citation dicts `_persist_reply`
-// (`modules/chat/chat_stream.py`) writes straight to Postgres, which are
-// `agents/chat/nodes/rag.py`'s own snake_case shape (`chunk_id`/`document_id`),
-// never passed through `modules/chat/sse.py::Citation`'s `to_camel` wire
-// alias the way a *live* `message_end` event's citations are. Reading a
-// persisted conversation's history and a turn that's mid-stream must
-// therefore agree on one shape -- `normalizeCitation` below is that one
-// place, accepting either casing so `MessageBubble` never has to care which
-// source a citation came from.
-
 import type { CompletedTurnMessage } from "@/features/chat/stores/chat-store";
 import type { components } from "@/shared/types/api";
 import type { Citation, ToolResultEvent } from "@/shared/types/sse-events";
@@ -26,6 +12,7 @@ export interface ChatMessageVM {
   toolResults: ToolResultEvent[];
 }
 
+// Persisted history citations are raw snake_case graph-state dicts; live message_end citations are camelCase.
 function normalizeCitation(raw: Record<string, unknown>): Citation {
   return {
     index: Number(raw.index ?? 0),

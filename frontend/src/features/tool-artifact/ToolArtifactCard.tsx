@@ -1,11 +1,4 @@
-// Cairn frontend — generic tool-result artifact card (BLUEPRINT.md §4.1, §8
-// step 8). Deliberately minimal: a `ToolResultEvent` is just `{ toolName,
-// result }` (`modules/chat/sse.py`) with no schema for `result`'s shape, so
-// this renders whatever comes back -- a JSON object as key/value rows, a
-// JSON array as a numbered list, anything else as preformatted text. An
-// `examples/` pack that needs a richer, tool-specific renderer swaps this
-// out; the core doesn't presume to know every tool's result shape.
-
+// Deliberately generic -- ToolResultEvent has no schema for result's shape, so this renders whatever comes back.
 import { Fragment } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card";

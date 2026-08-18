@@ -1,43 +1,4 @@
-// Cairn frontend — chat feature store (BLUEPRINT.md §4.1, §4.3, §8 step 8).
-//
-// Zustand, feature-local (§4.3: server-state like conversation/message
-// *history* belongs in TanStack Query, `features/chat/hooks/use-conversations.ts`
-// -- this store only ever holds the *live* turn currently streaming in).
-// `use-streaming-chat.ts` owns Layer 3 (the `switch` on `ChatSSEEvent.type`);
-// this module is what that switch calls into, one action per event type, plus
-// the `TypewriterEngine` wiring (§4.2) that turns `onMessageDelta`/`onToolResult`
-// into a metered `visibleText`/`releasedToolResults` reveal.
-//
-// The moment a turn finishes (`message_end`, a genuine stream failure, or a
-// user-requested stop), its content is folded into `completedTurns` and
-// `activeTurn` goes back to `null` -- so `activeTurn` is *only* ever the
-// in-flight turn, never a "just finished" one lingering around for
-// `MessageList` to special-case.
-//
-// **A `ChatSSEEvent` of type `error` is *not* always terminal** -- verified
-// against a real degraded-LLM run (no reachable model): `rag`/`tool`/
-// `guardrail` node failures emit an `error` event *and then still finish the
-// turn normally* (`message_delta` with the same graceful-fallback text,
-// `message_end`) -- `modules/chat/chat_stream.py`'s `_EventTranslator`
-// deliberately sends both; the `error` is a side-channel diagnostic, not a
-// "stop reading" signal. Only two cases genuinely end the stream with no
-// `message_end` to follow: the per-turn wall-clock budget (`mode=="timeout"`)
-// and an unhandled exception in `_run_turn`'s own top-level `except`. Since
-// an `error` event alone can't tell these apart from the recoverable case,
-// this store keeps two different actions: `onGraphError` just records the
-// latest one on `activeTurn.error` (informational, doesn't finalize --
-// `message_delta`/`message_end` keep flowing normally after it); `onTurnFailed`
-// is what actually folds the turn and disposes the engine, called by
-// `use-streaming-chat.ts` only once it's established (the stream ended
-// without ever reaching `message_end`) that nothing more is coming.
-//
-// Folding also sidesteps a real race: the assistant's reply is persisted
-// server-side *after* every SSE event for it has already gone out
-// (`modules/chat/chat_stream.py`'s `_persist_reply`), so refetching the
-// TanStack Query history right after `message_end` could still race the
-// write. `completedTurns` (client-only, cleared on conversation switch) is
-// the turn's source of truth until the next real history fetch (a fresh
-// mount) naturally picks it up from Postgres instead.
+// A "error" event isn't always terminal -- onGraphError just records it; onTurnFailed is the real finalizer.
 
 import { create } from "zustand";
 
@@ -84,11 +45,7 @@ interface ChatState {
   activeTurn: ActiveTurn | null;
   completedTurns: CompletedTurnMessage[];
   reducedMotion: boolean;
-  /** Set by `onTurnFailed`, alongside folding the turn into `completedTurns`
-   * -- `activeTurn.error` would never be observable (both changes land in
-   * the same `set()` call, §4.1's own note above), so the terminal failure
-   * needs a home outside `activeTurn` for the UI to react to. Cleared by the
-   * next `beginTurn`/`resetForConversation`. */
+  // Lives outside activeTurn because onTurnFailed clears activeTurn in the same set() call.
   lastError: { code: string; message: string } | null;
 }
 
@@ -114,10 +71,7 @@ interface ChatActions {
 type ChatStore = ChatState & ChatActions;
 
 let engine: TypewriterEngine | null = null;
-// Full `ToolResultEvent` payloads keyed by the id `onToolResult` mints and
-// hands to the engine as an opaque ordering token (§4.2's "ordered artifact
-// deferral") -- `onArtifactReleased` looks the payload back up once the
-// engine says it's this artifact's turn to appear.
+// Keyed by the id onToolResult mints as an opaque ordering token for the engine; onArtifactReleased looks it back up.
 const pendingArtifacts = new Map<string, ToolResultEvent>();
 
 function disposeEngine(): void {
@@ -269,9 +223,7 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
   },
 
   onGraphError(error) {
-    // Informational only -- see the module docstring: an `error` event is
-    // frequently followed by a normal `message_delta`/`message_end` for the
-    // same turn, so this must *not* touch the engine or finalize anything.
+    // Informational only -- must not touch the engine or finalize the turn.
     set((state) =>
       state.activeTurn
         ? { activeTurn: { ...state.activeTurn, error: { code: error.code, message: error.message } } }
@@ -284,12 +236,7 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
     set((state) => {
       if (!state.activeTurn) return state;
       const finished: ActiveTurn = { ...state.activeTurn, phase: "error", error };
-      // The backend's own `ErrorEvent.message` is written to be shown as the
-      // reply text (`modules/chat/chat_stream.py`'s `ErrorEvent(... message=
-      // final_state.get("answer") or _GENERIC_ERROR_MESSAGE)`); a client-side
-      // failure (parse error, a disconnect with no resume path) never typed
-      // any text at all, so falling back to it there too keeps the
-      // transcript from ending on a blank assistant bubble.
+      // Falls back to the error message so a client-side failure (parse error, no resume path) doesn't end on a blank bubble.
       const assistantContent = finished.visibleText || error.message;
       return {
         activeTurn: null,

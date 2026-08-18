@@ -1,31 +1,3 @@
-// Cairn frontend — the SSE pipeline's Layer 1 (fetch) + Layer 3 (typed
-// dispatch) (BLUEPRINT.md §4.2, §8 step 8). Layer 2 is `shared/api/sse-parser.ts`.
-//
-// Resume policy (§4.2, §3.7): a clean end -- `message_end` received, or the
-// body simply runs out right after it -- is *not* a disconnect; this hook
-// returns without touching the network again. A stream that ends *without*
-// `message_end`, or a `fetch`/read that throws, is treated as a disconnect:
-// if the turn has a `streamId` (durable mode), reconnect to
-// `GET /chat/stream/{id}?last_event_id=…` with capped backoff; simple mode
-// has no `streamId` and therefore no resume path -- BLUEPRINT.md says to
-// "handle that gracefully", so this surfaces one clear error event instead
-// of retrying against an endpoint that would just 404. (An `error` SSE event
-// on its own is *not* the disconnect signal -- see `chat-store.ts`'s module
-// docstring for why that's frequently not the last event of a turn.)
-//
-// `stopStreaming()` aborts the client's own fetch *and* (durable mode only)
-// calls `POST /chat/stream/{id}/stop` -- aborting alone only kills this
-// browser tab's read of a durable stream; the decoupled server-side producer
-// keeps running and writing frames until that endpoint says otherwise
-// (`modules/chat/chat_stream.py`'s own docstring).
-//
-// `consumeStream`/`attemptResume` are plain hoisted `function`s, not
-// `useCallback`s -- they call each other (a stream that dies mid-resume
-// retries by re-entering `consumeStream`), and neither is ever handed to a
-// child component or an effect's dependency array, so they don't need
-// `useCallback`'s referential stability -- only the hook's returned
-// `sendMessage`/`stopStreaming` do.
-
 import { useCallback, useEffect, useRef } from "react";
 
 import {
@@ -102,10 +74,7 @@ export function useStreamingChat(conversationId: string | null): UseStreamingCha
         store.onMessageEnd(event.citations ?? []);
         break;
       case "error":
-        // Not necessarily terminal -- see `chat-store.ts`'s module docstring.
-        // A `message_delta`/`message_end` for this same turn frequently
-        // still follows; `consumeStream` decides afterwards, once the
-        // stream itself actually ends, whether this was the last word.
+        // Not necessarily terminal -- a message_delta/message_end for this turn may still follow.
         store.onGraphError(event);
         break;
     }
@@ -134,11 +103,7 @@ export function useStreamingChat(conversationId: string | null): UseStreamingCha
     }
     if (sawMessageEnd || stoppedRef.current) return;
 
-    // The stream closed without ever reaching `message_end`. If the graph
-    // itself already told us why (a `timeout`/unhandled-exception `error`
-    // event, `chat-store.ts`'s docstring) there's nothing to reconnect
-    // to -- that error *is* the last word for this turn. Only a stream that
-    // died with no explanation at all is worth trying to resume.
+    // A graph-reported error is the terminal event for this turn; only an unexplained close is worth resuming.
     const knownError = useChatStore.getState().activeTurn?.error;
     if (knownError) {
       useChatStore.getState().onTurnFailed(knownError);
@@ -226,7 +191,7 @@ export function useStreamingChat(conversationId: string | null): UseStreamingCha
         await consumeStream(response.body);
       })();
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `consumeStream`/`attemptResume`/`dispatch`/`failTurn` are hoisted function declarations recreated every render, not stateful values; including them would just churn `sendMessage`'s identity every render for no behavioral difference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- consumeStream/attemptResume/dispatch/failTurn are hoisted functions, not stateful values.
     [conversationId],
   );
 
@@ -237,9 +202,8 @@ export function useStreamingChat(conversationId: string | null): UseStreamingCha
     abortRef.current?.abort();
     useChatStore.getState().onStopped();
     if (turn.streamId) {
-      void stopChatStream(turn.streamId).catch(() => {
-        // Best-effort: the client has already stopped reading either way.
-      });
+      // Abort only stops this tab's read -- the durable server-side producer keeps running until told to stop.
+      void stopChatStream(turn.streamId).catch(() => {});
     }
   }, []);
 

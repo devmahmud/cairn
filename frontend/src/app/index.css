@@ -1,13 +1,6 @@
 @import "tailwindcss";
 
-/* Cairn frontend — Tailwind v4 CSS-first design tokens (BLUEPRINT.md §4.3,
-   §8 step 8). shadcn's own `init` output for a Tailwind v4 project: CSS
-   custom properties for the palette, re-exposed as Tailwind utilities via
-   `@theme inline`, so `bg-background`/`text-foreground`/etc. resolve to
-   these tokens instead of hard-coded hex anywhere in `shared/components/ui`.
-   Light tokens live on bare `:root`; dark only overrides inside the media
-   query below -- this app has no manual theme toggle, so it follows the OS
-   setting exclusively. */
+/* No manual theme toggle -- dark mode follows the OS via prefers-color-scheme only. */
 
 :root {
   --radius: 0.625rem;

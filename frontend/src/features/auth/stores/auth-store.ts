@@ -1,10 +1,4 @@
-// Cairn frontend — auth store (BLUEPRINT.md §4.1, §4.3, §8 step 8).
-//
-// Zustand, persisted (tokens only, `localStorage`) so a page reload doesn't
-// force a re-login. Registers itself into `shared/api/auth-session.ts`'s
-// `AuthSession` seam once at module load -- *before* anything can call
-// `authorizedFetch` -- so `client.ts` never imports this store (or Zustand)
-// directly (§4's "`shared/` has zero business logic").
+// Registers into auth-session.ts's AuthSession seam at module load, so shared/api/client.ts never imports this store directly.
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
@@ -82,11 +76,8 @@ export const useAuthStore = create<AuthStore>()(
         const { refreshToken } = get();
         set({ accessToken: null, refreshToken: null, user: null, status: "unauthenticated", error: null });
         if (refreshToken) {
-          await apiLogout(refreshToken).catch(() => {
-            // Best-effort revocation -- the tokens are already cleared
-            // client-side either way, so a network failure here shouldn't
-            // block the user from appearing logged out.
-          });
+          // Best-effort: tokens are already cleared client-side regardless.
+          await apiLogout(refreshToken).catch(() => {});
         }
       },
 
@@ -98,15 +89,7 @@ export const useAuthStore = create<AuthStore>()(
       name: "cairn.auth",
       partialize: (state) => ({ accessToken: state.accessToken, refreshToken: state.refreshToken }),
       onRehydrateStorage: () => (state) => {
-        // Deferred to a fresh microtask: `persist`'s localStorage rehydration
-        // runs synchronously, inside this same `create(...)` call -- before
-        // `export const useAuthStore = create(...)` below has finished
-        // assigning the binding, and before `setAuthSession(...)` (also
-        // below) has registered the real token accessors `getMe()` needs for
-        // its Authorization header. `restoreSession` references both by
-        // that module-level binding, so calling it any earlier than "after
-        // this module's synchronous top-level code has fully run" reads
-        // `useAuthStore` as `undefined`.
+        // Deferred: rehydration fires synchronously inside this create(...) call, before the useAuthStore binding below exists.
         queueMicrotask(() => {
           void restoreSession(state);
         });

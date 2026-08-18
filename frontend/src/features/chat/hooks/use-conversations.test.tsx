@@ -22,11 +22,7 @@ describe("useInvalidateMessages", () => {
     const first = result.current;
     rerender();
 
-    // Stability matters here, not just convenience: `ChatContainer` puts
-    // this function in a `useEffect` dependency array (BLUEPRINT.md §4.1) --
-    // a new identity every render would re-run that effect (and its
-    // invalidate-on-cleanup) constantly instead of only on a real
-    // conversation switch.
+    // ChatContainer puts this in a useEffect dependency array; an unstable identity would re-run it every render.
     expect(result.current).toBe(first);
   });
 

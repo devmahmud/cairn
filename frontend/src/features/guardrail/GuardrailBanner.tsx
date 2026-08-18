@@ -1,9 +1,4 @@
-// Cairn frontend — guardrail verdict banner (BLUEPRINT.md §4.1, §3.12, §8
-// step 8). Renders a `GuardrailEvent` (`action`/`message`, §3.12) as-is --
-// `action` badge colors stay on the conventional warning/destructive hues
-// regardless of brand palette, the same way the shared `Badge` component's
-// `success`/`warning`/`destructive` variants are pinned to those tokens.
-
+// Keep warning/destructive on their conventional hues -- don't recolor to match brand.
 import { AlertTriangle, ShieldAlert } from "lucide-react";
 
 import { Badge } from "@/shared/components/ui/badge";

@@ -1,26 +1,4 @@
-// Cairn frontend — the SSE wire parser (BLUEPRINT.md §4.2, §8 step 8).
-//
-// Layer 2 of the pipeline: a spec-compliant async generator over a fetch
-// `ReadableStream<Uint8Array>` body -- decode -> buffer -> blank-line
-// dispatch -> skip `:`-prefixed comments (FastAPI's native
-// `EventSourceResponse` heartbeat pings, §3.7) -> `JSON.parse` the
-// accumulated `data:` lines. Framework-agnostic and transport-agnostic: it
-// doesn't know about `ChatSSEEvent`, `fetch`, or Zustand -- Layer 3
-// (`features/chat/hooks/use-streaming-chat.ts`) is what gives the parsed
-// `event`/`data` pairs domain meaning.
-//
-// A malformed `data:` payload is surfaced as a typed `{ kind: "parse-error"
-// }` item, not a silent `console.warn` -- the caller decides whether one bad
-// frame is fatal for the stream. A genuine network failure (the connection
-// drops mid-read) is deliberately *not* caught here: it propagates as a
-// rejected `reader.read()`/thrown error out of this generator, which is
-// exactly the signal `use-streaming-chat.ts` needs to tell "the parser saw
-// bad data" apart from "the connection dropped, try to resume".
-//
-// Line splitting only recognizes `\n` and `\r\n` (stripping a trailing `\r`),
-// not a lone `\r` -- real SSE servers (this one included, via Starlette/
-// uvicorn) never emit CR-only line endings, and handling that third case
-// would add real complexity for a wire format nothing here produces.
+// Network failures are deliberately left uncaught -- the caller distinguishes "bad data" from "dropped, try to resume" by whether this throws.
 
 export interface ParsedSSEFrame {
   id: string | null;
@@ -98,9 +76,7 @@ export async function* parseSSEStream(
       if (field === "event") eventType = value;
       else if (field === "data") dataLines.push(value);
       else if (field === "id" && !value.includes("\0")) lastId = value;
-      // `retry:` (reconnection-time hint) is intentionally ignored -- this
-      // template's reconnect policy (§4.2) is driven by the caller, not the
-      // server-suggested delay.
+      // `retry:` is intentionally ignored -- reconnect policy is driven by the caller.
     }
   } finally {
     reader.releaseLock();
