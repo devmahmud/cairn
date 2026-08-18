@@ -26,6 +26,14 @@ intents:
     description: A greeting or small talk with no information need.
     route: answer
 
+  - name: meta_conversation
+    description: >
+      A question about this conversation itself -- recalling something said
+      earlier, or asking what was just asked -- rather than a new question
+      about the product. Answerable from chat history alone, not the docs
+      corpus, so it must not be classified as product_question.
+    route: answer
+
   - name: web_search
     description: >
       A question that needs current information outside the bundled docs

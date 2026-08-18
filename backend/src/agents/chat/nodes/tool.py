@@ -7,12 +7,17 @@ from typing import Any
 
 import structlog
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.messages.tool import ToolCall
 from langchain_core.tools import BaseTool, tool
 
 from agents.base import GraphNode
-from agents.chat.nodes._util import content_to_text, stream_writer_or_noop, today_iso
+from agents.chat.nodes._util import (
+    content_to_text,
+    recent_history,
+    stream_writer_or_noop,
+    today_iso,
+)
 from agents.chat.state import ChatState
 from agents.llm import get_llm
 from agents.registry import register
@@ -69,7 +74,7 @@ class ToolAgentNode(GraphNode[ChatState]):
         question = state.get("input", "")
         messages: list[BaseMessage] = [
             SystemMessage(content=_TOOL_SYSTEM_PROMPT.format(today=today_iso())),
-            HumanMessage(content=question),
+            *recent_history(state.get("messages", [])),
         ]
         bound_llm = self._llm_factory("tool").bind_tools(self._tools)
         writer = stream_writer_or_noop()

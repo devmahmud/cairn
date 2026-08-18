@@ -59,6 +59,9 @@ LABELED_UTTERANCES: tuple[LabeledUtterance, ...] = (
         "Can you check today's pricing for the pro plan on your website?", "web_search"
     ),
     LabeledUtterance("Is there an outage happening with your service right now?", "web_search"),
+    LabeledUtterance("What was the previous question I asked you?", "meta_conversation"),
+    LabeledUtterance("Can you summarize what we've talked about so far?", "meta_conversation"),
+    LabeledUtterance("What did you just tell me?", "meta_conversation"),
     LabeledUtterance("asdkjasdlkj qwoieqwoie", "unclear"),
     LabeledUtterance("???", "unclear"),
     LabeledUtterance("banana purple seventeen maybe", "unclear"),

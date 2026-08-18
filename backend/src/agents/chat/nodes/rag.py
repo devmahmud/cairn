@@ -11,7 +11,12 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from agents.base import GraphNode
 from agents.chat.nodes._protocols import BehaviorSource
-from agents.chat.nodes._util import content_to_text, stream_writer_or_noop, today_iso
+from agents.chat.nodes._util import (
+    content_to_text,
+    recent_history,
+    stream_writer_or_noop,
+    today_iso,
+)
 from agents.chat.state import ChatState
 from agents.llm import get_llm
 from agents.registry import register
@@ -118,11 +123,18 @@ class RagNode(GraphNode[ChatState]):
                 ],
             )
             llm = self._llm_factory("rag")
+            # Prior turns for context, with the current turn's raw question (always state["messages"][-1] here --
+            # no earlier node touches messages) swapped for the RAG-grounded prompt instead of asking it twice.
+            prior_turns = recent_history(state.get("messages", [])[:-1])
             # Custom writer, not the model's auto-stream: chat_stream.py's translator relies on this to avoid double-emitting.
             writer = stream_writer_or_noop()
             pieces: list[str] = []
             async for chunk in llm.astream(
-                [SystemMessage(content=system_prompt), HumanMessage(content=answer_prompt)]
+                [
+                    SystemMessage(content=system_prompt),
+                    *prior_turns,
+                    HumanMessage(content=answer_prompt),
+                ]
             ):
                 piece = content_to_text(chunk.content)
                 if piece:

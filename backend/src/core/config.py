@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MIN: int = 0
     MAX_GRAPH_HOPS: int = 6
     TURN_BUDGET_SECONDS: float = 90.0
+    MAX_HISTORY_MESSAGES: int = 24
     AUTH_ENABLED: bool = True
     JWT_SECRET: str = "change-me"
     # Short-lived by design: access tokens verify statelessly (no DB round trip); the revocable refresh_tokens table bounds exposure instead.

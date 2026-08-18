@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 
 from agents.chat.nodes.rag import RagNode
 from agents.chat.state import ChatState
@@ -174,3 +174,50 @@ async def test_abstains_on_unreranked_score_below_the_unreranked_threshold() -> 
     result = await node(_state())
 
     assert result["abstained"] is True
+
+
+# --- Conversation memory: prior turns must reach the model, not just the
+# current question (regression coverage for a bug where every LLM-calling
+# node rebuilt a single-message prompt from scratch, discarding
+# state["messages"] entirely -- the graph durably accumulated history but
+# nothing ever read it back). ----------------------------------------------
+
+
+async def test_includes_prior_turns_as_context_alongside_the_grounded_prompt() -> None:
+    prior: list[AnyMessage] = [
+        HumanMessage(content="What's Cairn?"),
+        AIMessage(content="An agent chat template."),
+    ]
+    fake = FakeChatModel(responses=[AIMessage(content="Use a bearer token [1].")])
+    node = _node(docs=[_DOC], llm=fake)
+
+    await node(
+        {
+            "input": "How do I authenticate?",
+            "messages": [*prior, HumanMessage(content="How do I authenticate?")],
+        }
+    )
+
+    [sent] = fake.received_messages
+    assert isinstance(sent[0], SystemMessage)
+    # Prior turns pass through unchanged...
+    assert sent[1:3] == prior
+    # ...and the raw current-turn question is replaced by the grounded (chunks-included) prompt, not sent twice.
+    assert isinstance(sent[3], HumanMessage)
+    assert "How do I authenticate?" in sent[3].content
+    assert "Send an Authorization header." in sent[3].content
+
+
+async def test_truncates_history_beyond_max_history_messages() -> None:
+    prior: list[AnyMessage] = [HumanMessage(content=f"turn {i}") for i in range(40)]
+    fake = FakeChatModel(responses=[AIMessage(content="Use a bearer token [1].")])
+    node = _node(docs=[_DOC], llm=fake)
+
+    await node({"input": "latest", "messages": [*prior, HumanMessage(content="latest")]})
+
+    [sent] = fake.received_messages
+    # SystemMessage + at most MAX_HISTORY_MESSAGES prior turns + the grounded current-turn prompt.
+    from core.config import settings
+
+    assert len(sent) <= 2 + settings.MAX_HISTORY_MESSAGES
+    assert sent[1] == prior[-(settings.MAX_HISTORY_MESSAGES) :][0]

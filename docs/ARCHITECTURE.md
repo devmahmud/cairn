@@ -255,9 +255,19 @@ What each node does:
 | `input_rail` | No-op unless `GUARDRAILS_ENABLED`. Runs the denylist → PII → guard-model pipeline over the user's raw input. A block clears `state["input"]` and sets `state["error"]="input_rail_blocked"` — it can't jump straight to `guardrail` (edges are fixed), so `classify` still runs once on an emptied input; `route` checks for that error code *before* its normal routing-table lookup and redirects to `guardrail` regardless of what `classify` produced. |
 | `classify` | One structured-output call (`with_structured_output`, method from `STRUCTURED_OUTPUT_MODE` — `json_schema` by default) producing `{intent, confidence}`. Any failure — timeout, provider error, malformed output — degrades to `{intent: "unclear", confidence: 0.0}` rather than failing the turn. |
 | `route` | Pure Python, no LLM call. Looks `intent` up in `config/behavior/routing.yaml` (hot-reloaded, runtime-overridable) and dispatches to that intent's `route`. Below `confidence_threshold` or no match → `default_route`. |
-| `answer` | Plain reply, no retrieval, no tools — the `greeting` intent today. |
+| `answer` | Plain reply, no retrieval, no tools — the `greeting` and `meta_conversation` intents today. |
 | `rag` | Hybrid retrieval → abstain-or-ground → cite. See [RAG pipeline](#rag-pipeline). |
 | `tool` | A bounded tool-calling loop (`bind_tools`), hop-capped at `MAX_GRAPH_HOPS`. Ships two demo tools (`get_current_date`, a stub `web_search` that explains it isn't configured) — no real external API key is required to boot. |
+
+**Conversation history.** `ChatState.messages` accumulates across turns via LangGraph's `add_messages`
+reducer (durably — it's checkpointed), but a node has to actually read it to make the conversation feel
+conversational: `answer`, `rag`, and `tool` all pass `agents/chat/nodes/_util.py::recent_history(...)` (a
+tail-window of `state["messages"]`, capped by `MAX_HISTORY_MESSAGES`, default 24) into their LLM call —
+`rag` folds it in alongside the current turn's retrieval-grounded prompt rather than asking the same
+question twice. `classify` only ever sees the current message, since intent classification of a single
+utterance doesn't need history — which is also why `meta_conversation` (recall/"what did I just ask")
+exists as its own routing-table intent to `answer`, rather than depending on `rag`'s retrieval-gated
+grounding step for something that doc-corpus similarity search can't match anyway.
 | `guardrail` | Distinguishes a real block (`input_rail`/`output_rail` set an error code) from a plain low-confidence/`unclear` routing outcome, and replies with a refusal vs. a clarification prompt accordingly. `interrupt()`-based human-in-the-loop review is not wired here — there's no reviewer queue yet — but the node's shape already supports adding it later without a graph rewire. |
 | `output_rail` | The mirror of `input_rail`, run over `state["answer"]` after every branch converges. No-op unless `GUARDRAILS_ENABLED`. |
 

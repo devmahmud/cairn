@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from langchain_core.messages import BaseMessage
 from langgraph.config import get_stream_writer
+
+from core.config import settings
 
 
 def stream_writer_or_noop() -> Callable[[dict[str, Any]], None]:
@@ -32,3 +35,10 @@ def content_to_text(content: Any) -> str:
 
 def today_iso() -> str:
     return datetime.now(UTC).date().isoformat()
+
+
+def recent_history(
+    messages: Sequence[BaseMessage], *, limit: int = settings.MAX_HISTORY_MESSAGES
+) -> list[BaseMessage]:
+    """Tail-truncate accumulated turn history so an unbounded conversation can't blow the model's context window or per-turn cost. A fixed window, not summarization -- the simplest thing that keeps a long conversation from growing without bound."""
+    return list(messages[-limit:]) if limit > 0 else list(messages)

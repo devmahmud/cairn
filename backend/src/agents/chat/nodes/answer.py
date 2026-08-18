@@ -7,10 +7,10 @@ from typing import Any
 
 import structlog
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage
 
 from agents.base import GraphNode
-from agents.chat.nodes._util import content_to_text, today_iso
+from agents.chat.nodes._util import content_to_text, recent_history, today_iso
 from agents.chat.state import ChatState
 from agents.llm import get_llm
 from agents.registry import register
@@ -41,7 +41,6 @@ class AnswerNode(GraphNode[ChatState]):
         self._product_name = product_name
 
     async def __call__(self, state: ChatState) -> dict[str, Any]:
-        question = state.get("input", "")
         try:
             system_prompt = await self._prompt_engine.render(
                 self._system_prompt_name,
@@ -51,9 +50,8 @@ class AnswerNode(GraphNode[ChatState]):
                 tool_names=[],
             )
             llm = self._llm_factory("answer")
-            response = await llm.ainvoke(
-                [SystemMessage(content=system_prompt), HumanMessage(content=question)]
-            )
+            history = recent_history(state.get("messages", []))
+            response = await llm.ainvoke([SystemMessage(content=system_prompt), *history])
         except Exception:
             # Any failure here -- timeout, provider error, prompt-render error -- degrades to one graceful message rather than failing the turn.
             logger.warning("answer.failed_falling_back_to_graceful_message", exc_info=True)

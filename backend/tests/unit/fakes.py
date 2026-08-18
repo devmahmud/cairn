@@ -51,6 +51,9 @@ class FakeChatModel(BaseChatModel):
 
     responses: list[BaseMessage] = Field(default_factory=list)
     structured_response: BaseModel | None = None
+    #: Every `messages` list this fake was actually called with, in call order --
+    #: lets a test assert on what context (e.g. prior-turn history) a node sent.
+    received_messages: list[list[BaseMessage]] = Field(default_factory=list)
 
     def _generate(
         self,
@@ -59,6 +62,7 @@ class FakeChatModel(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        self.received_messages.append(messages)
         if not self.responses:
             raise AssertionError("FakeChatModel: no more canned responses queued.")
         message = self.responses.pop(0)
