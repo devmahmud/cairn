@@ -31,6 +31,10 @@ frontend/build/
 # --- Docker / data ---
 *.log
 .docker-data/
+# Personal port/env overrides (e.g. when default ports collide with other
+# local services) -- Docker Compose picks this up automatically, no -f flag
+# needed; it's yours to keep, never the template's.
+docker-compose.override.yml
 
 # --- Test / coverage artifacts ---
 .coverage
