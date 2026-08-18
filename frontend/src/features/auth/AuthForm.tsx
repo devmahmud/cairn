@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
 import { Button } from "@/shared/components/ui/button";
@@ -21,6 +22,7 @@ export function AuthForm({ mode }: AuthFormProps) {
 
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [passwordVisible, setPasswordVisible] = React.useState(false);
 
   const busy = status === "authenticating";
 
@@ -70,18 +72,30 @@ export function AuthForm({ mode }: AuthFormProps) {
                 <label htmlFor="password" className="text-sm font-medium">
                   Password
                 </label>
-                <Input
-                  id="password"
-                  type="password"
-                  autoComplete={mode === "login" ? "current-password" : "new-password"}
-                  required
-                  minLength={8}
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    if (error) clearError();
-                  }}
-                />
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={passwordVisible ? "text" : "password"}
+                    autoComplete={mode === "login" ? "current-password" : "new-password"}
+                    required
+                    minLength={8}
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (error) clearError();
+                    }}
+                    className="pr-9"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setPasswordVisible((visible) => !visible)}
+                    aria-label={passwordVisible ? "Hide password" : "Show password"}
+                    aria-pressed={passwordVisible}
+                    className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-muted-foreground hover:text-foreground"
+                  >
+                    {passwordVisible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </button>
+                </div>
               </div>
               {error ? (
                 <p role="alert" className="text-sm text-destructive">

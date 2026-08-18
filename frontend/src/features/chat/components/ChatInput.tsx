@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Square } from "lucide-react";
+import { ArrowUp, Square } from "lucide-react";
 
 import { Button } from "@/shared/components/ui/button";
 import { Textarea } from "@/shared/components/ui/textarea";
@@ -44,22 +44,22 @@ export function ChatInput({ disabled, streaming, onSend, onStop }: ChatInputProp
           type="button"
           variant="secondary"
           size="icon"
-          className="rounded-full"
+          className="rounded-full transition-transform active:scale-90"
           onClick={onStop}
           aria-label="Stop generating"
         >
-          <Square className="size-4" />
+          <Square className="size-3.5 fill-current" />
         </Button>
       ) : (
         <Button
           type="button"
           size="icon"
-          className="rounded-full"
+          className="rounded-full shadow-sm transition-transform enabled:hover:scale-105 active:scale-90 disabled:shadow-none"
           onClick={submit}
           disabled={disabled || value.trim().length === 0}
           aria-label="Send message"
         >
-          <Send className="size-4" />
+          <ArrowUp className="size-4" strokeWidth={2.5} />
         </Button>
       )}
     </div>
