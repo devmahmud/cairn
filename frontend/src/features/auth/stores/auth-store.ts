@@ -98,7 +98,18 @@ export const useAuthStore = create<AuthStore>()(
       name: "cairn.auth",
       partialize: (state) => ({ accessToken: state.accessToken, refreshToken: state.refreshToken }),
       onRehydrateStorage: () => (state) => {
-        void restoreSession(state);
+        // Deferred to a fresh microtask: `persist`'s localStorage rehydration
+        // runs synchronously, inside this same `create(...)` call -- before
+        // `export const useAuthStore = create(...)` below has finished
+        // assigning the binding, and before `setAuthSession(...)` (also
+        // below) has registered the real token accessors `getMe()` needs for
+        // its Authorization header. `restoreSession` references both by
+        // that module-level binding, so calling it any earlier than "after
+        // this module's synchronous top-level code has fully run" reads
+        // `useAuthStore` as `undefined`.
+        queueMicrotask(() => {
+          void restoreSession(state);
+        });
       },
     },
   ),
